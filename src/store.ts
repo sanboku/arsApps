@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { DB, Job, RecurFreq } from './types'
+import JapaneseHolidays from 'japanese-holidays'
+import type { DB, Job, RecurRule } from './types'
 
 // ---- 日付ユーティリティ（ローカル日付を YYYY-MM-DD で扱う） ----
 export const ymd = (d: Date) =>
@@ -31,15 +32,45 @@ export const daysUntil = (s: string) =>
 export const uid = () => Math.random().toString(36).slice(2, 10)
 export const yen = (n: number) => `¥${(n || 0).toLocaleString()}`
 
+/** 祝日名（祝日でなければ undefined） */
+export const holidayName = (s: string): string | undefined => JapaneseHolidays.isHoliday(parseYmd(s)) || undefined
+
+export const monthStart = (s: string) => `${s.slice(0, 7)}-01`
+export const monthDays = (s: string) => {
+  const first = monthStart(s)
+  const d = parseYmd(first)
+  const n = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
+  return Array.from({ length: n }, (_, i) => addDays(first, i))
+}
+
+/** 午前/午後の判定（時間未設定は午前扱い） */
+export const isPM = (j: Job) => (j.pickupTime || j.dropoffTime || '00:00') >= '12:00'
+/** 時間の早い順（時間未設定は先頭） */
+export const byTime = (a: Job, b: Job) =>
+  (a.pickupTime || a.dropoffTime).localeCompare(b.pickupTime || b.dropoffTime) || (a.groupIndex ?? 0) - (b.groupIndex ?? 0)
+
+/** カード等に出す行先表示。降ろし地が空なら業務名（積み地欄）のみ */
+export const routeText = (j: Job) => {
+  const p = j.pickups.filter(Boolean).join('・')
+  const d = j.dropoffs.filter(Boolean).join('・')
+  return d ? `${p || '—'} → ${d}` : p || '—'
+}
+
+export const WEEKDAYS_MON_FIRST = [1, 2, 3, 4, 5, 6, 0]
+
 /** 定期案件の発生日を列挙 */
-export function recurDates(start: string, end: string, freq: RecurFreq): string[] {
+export function recurDates(start: string, end: string, rule: RecurRule): string[] {
   const out: string[] = []
-  const startDow = parseYmd(start).getDay()
-  for (let d = start; d <= end && out.length < 400; d = addDays(d, 1)) {
-    const dow = parseYmd(d).getDay()
-    if (freq === 'daily') out.push(d)
-    else if (freq === 'weekdays' && dow >= 1 && dow <= 5) out.push(d)
-    else if (freq === 'weekly' && dow === startDow) out.push(d)
+  const ws = weekStart(start)
+  const last = rule.freq === 'dow' && rule.interval === 0 ? addDays(ws, 6) : end
+  for (let d = start; d <= last && out.length < 400; d = addDays(d, 1)) {
+    if (!rule.holidays && holidayName(d)) continue
+    if (rule.freq === 'dow') {
+      if (!rule.dows.includes(parseYmd(d).getDay())) continue
+      const week = Math.floor((parseYmd(d).getTime() - parseYmd(ws).getTime()) / (7 * 86400000))
+      if (rule.interval === 2 && week % 2 === 1) continue
+    }
+    out.push(d)
   }
   return out
 }
@@ -51,7 +82,8 @@ export const emptyJob = (p: Partial<Job> = {}): Job => ({
   clientId: null,
   pickups: [''],
   dropoffs: [''],
-  vehicles: 1,
+  pickupTime: '',
+  dropoffTime: '',
   note: '',
   billAmount: 0,
   payAmount: 0,
@@ -85,18 +117,21 @@ function seed(): DB {
   }
   // 山田さんは毎日固定（基本割り当て）
   const sid = uid()
-  for (const d of recurDates(ws, addDays(ws, 27), 'weekdays'))
-    db.jobs.push(emptyJob({ date: d, driverId: 'd1', clientId: 'k1', pickups: ['〇〇物流 東雲センター'], dropoffs: ['都内ルート配送'], seriesId: sid, billAmount: 25000, payAmount: 18000, note: '固定ルート' }))
+  for (const d of recurDates(ws, addDays(ws, 34), { freq: 'dow', dows: [1, 2, 3, 4, 5], holidays: false, interval: 1 }))
+    db.jobs.push(emptyJob({ date: d, driverId: 'd1', clientId: 'k1', pickups: ['〇〇便業務'], dropoffs: [], pickupTime: '08:00', seriesId: sid, billAmount: 25000, payAmount: 18000, note: '固定ルート' }))
+  const gid = uid()
   db.jobs.push(
-    emptyJob({ date: addDays(ws, 1), driverId: 'd2', clientId: 'k2', pickups: ['△△商事 川崎倉庫'], dropoffs: ['横浜市内', '藤沢市'], billAmount: 30000, payAmount: 22000 }),
-    emptyJob({ date: addDays(ws, 2), driverId: 'd4', clientId: 'k3', pickups: ['□□ 市川DC'], dropoffs: ['千葉市内'], vehicles: 2, billAmount: 50000, payAmount: 38000 }),
-    emptyJob({ date: addDays(ws, 3), driverId: null, clientId: 'k2', pickups: ['△△商事 本社'], dropoffs: ['大宮'], note: '担当未定・要調整', billAmount: 20000, payAmount: 15000 }),
-    emptyJob({ date: addDays(ws, 4), driverId: 'd5', clientId: 'k1', pickups: ['〇〇物流 東雲センター'], dropoffs: ['羽田'], billAmount: 18000, payAmount: 13000 }),
+    emptyJob({ date: addDays(ws, 1), driverId: 'd2', clientId: 'k2', pickups: ['△△商事 川崎倉庫'], dropoffs: ['横浜市内', '藤沢市'], pickupTime: '13:30', dropoffTime: '16:00', billAmount: 30000, payAmount: 22000 }),
+    emptyJob({ date: addDays(ws, 1), driverId: 'd2', clientId: 'k3', pickups: ['□□ 市川DC'], dropoffs: ['船橋'], pickupTime: '07:00', dropoffTime: '09:00', billAmount: 15000, payAmount: 11000 }),
+    emptyJob({ date: addDays(ws, 2), driverId: 'd4', clientId: 'k3', pickups: ['□□ 市川DC'], dropoffs: ['千葉市内'], pickupTime: '09:00', groupId: gid, groupIndex: 1, billAmount: 25000, payAmount: 19000 }),
+    emptyJob({ date: addDays(ws, 2), driverId: 'd5', clientId: 'k3', pickups: ['□□ 市川DC'], dropoffs: ['千葉市内'], pickupTime: '09:00', groupId: gid, groupIndex: 2, billAmount: 25000, payAmount: 19000 }),
+    emptyJob({ date: addDays(ws, 3), driverId: null, clientId: 'k2', pickups: ['△△商事 本社'], dropoffs: ['大宮'], pickupTime: '14:00', note: '担当未定・要調整', billAmount: 20000, payAmount: 15000 }),
+    emptyJob({ date: addDays(ws, 4), driverId: 'd3', clientId: 'k1', pickups: ['〇〇物流 東雲センター'], dropoffs: ['羽田'], pickupTime: '15:00', billAmount: 18000, payAmount: 13000 }),
   )
   return db
 }
 
-const KEY = 'arsapps-db-v1'
+const KEY = 'arsapps-db-v2' // データ構造を変えたらバージョンを上げる（サンプル版は初期データに戻る）
 const load = (): DB => {
   try {
     const raw = localStorage.getItem(KEY)

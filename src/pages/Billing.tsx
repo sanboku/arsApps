@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import * as XLSX from 'xlsx'
 import type { Store } from '../store'
-import { today, yen } from '../store'
+import { routeText, today, yen } from '../store'
 import type { DB, Job } from '../types'
 
 /** 支払先：所属会社のドライバーは会社単位でまとめる */
@@ -46,9 +46,9 @@ export default function Billing({ store }: { store: Store }) {
       請求先: clientName(j),
       担当: db.drivers.find((d) => d.id === j.driverId)?.fullName ?? '未定',
       支払先: payeeOf(db, j),
+      時間: [j.pickupTime, j.dropoffTime].filter(Boolean).join('〜'),
       積み地: j.pickups.filter(Boolean).join(' / '),
       降ろし地: j.dropoffs.filter(Boolean).join(' / '),
-      台数: j.vehicles,
       請求額: j.billAmount,
       支払額: j.payAmount,
       粗利: j.billAmount - j.payAmount,
@@ -59,8 +59,8 @@ export default function Billing({ store }: { store: Store }) {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(byPayee.map((r) => ({ 支払先: r.name, 件数: r.count, 支払額: r.pay }))), '支払先別')
     // 請求先ごとのシート（請求書の下書きとして編集できるように）
     for (const c of byClient) {
-      const rows = jobs.filter((j) => clientName(j) === c.name).map((j) => ({ 日付: j.date, 内容: `${j.pickups.filter(Boolean).join('・')} → ${j.dropoffs.filter(Boolean).join('・')}`, 台数: j.vehicles, 金額: j.billAmount }))
-      rows.push({ 日付: '', 内容: '合計', 台数: 0, 金額: c.bill })
+      const rows = jobs.filter((j) => clientName(j) === c.name).map((j) => ({ 日付: j.date, 内容: routeText(j), 金額: j.billAmount }))
+      rows.push({ 日付: '', 内容: '合計', 金額: c.bill })
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), c.name.replace(/[\\/?*[\]:]/g, '').slice(0, 31))
     }
     XLSX.writeFile(wb, `請求支払_${month}.xlsx`)
@@ -95,7 +95,7 @@ export default function Billing({ store }: { store: Store }) {
                   <td className="nowrap">{j.date}</td>
                   <td>{clientName(j)}</td>
                   <td>{payeeOf(db, j)}</td>
-                  <td className="small">{j.pickups.filter(Boolean).join('・')} → {j.dropoffs.filter(Boolean).join('・')}{j.vehicles > 1 && ` ×${j.vehicles}台`}</td>
+                  <td className="small">{routeText(j)}{j.groupId && '（複数台）'}</td>
                   <td><input className="num" type="number" value={j.billAmount} onChange={(e) => setAmount(j.id, 'billAmount', +e.target.value)} /></td>
                   <td><input className="num" type="number" value={j.payAmount} onChange={(e) => setAmount(j.id, 'payAmount', +e.target.value)} /></td>
                 </tr>

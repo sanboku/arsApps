@@ -1,5 +1,5 @@
 import type { Store } from '../store'
-import { addDays, daysUntil, fmtMD, today, weekStart } from '../store'
+import { addDays, daysUntil, fmtMD, routeText, today, weekStart } from '../store'
 
 const TILES = [
   { href: '#schedule', icon: '📅', title: '案件予定表', desc: 'ドライバー×日付で案件を管理' },
@@ -69,8 +69,7 @@ export default function Home({ store }: { store: Store }) {
             <ul className="list">
               {unassigned.map((j) => (
                 <li key={j.id}>
-                  {fmtMD(j.date)} {db.clients.find((c) => c.id === j.clientId)?.name ?? '請求先未設定'}：
-                  {j.pickups.filter(Boolean).join('・')} → {j.dropoffs.filter(Boolean).join('・')}
+                  {fmtMD(j.date)} {db.clients.find((c) => c.id === j.clientId)?.name ?? '請求先未設定'}：{routeText(j)}
                 </li>
               ))}
             </ul>

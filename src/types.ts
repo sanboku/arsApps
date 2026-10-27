@@ -25,19 +25,30 @@ export interface Client {
   color: string
 }
 
-export type RecurFreq = 'daily' | 'weekdays' | 'weekly'
+/** 定期案件の繰り返しルール */
+export interface RecurRule {
+  freq: 'daily' | 'dow' // 毎日 / 曜日選択
+  dows: number[] // 曜日選択時の曜日（0=日〜6=土）
+  holidays: boolean // 祝日も稼働するか
+  interval: 1 | 2 | 0 // 1=毎週, 2=隔週, 0=開始週のみ（曜日選択時）
+}
 
 export interface Job {
   id: ID
   date: string // YYYY-MM-DD
   driverId: ID | null // null = 担当者未定
   clientId: ID | null
+  /** 積み地。降ろし地が空の場合は「○○便業務」など業務名として扱う */
   pickups: string[]
   dropoffs: string[]
-  vehicles: number
+  pickupTime: string // HH:MM（空=未設定）
+  dropoffTime: string
   note: string
   /** 定期案件として一括生成された場合のシリーズID */
   seriesId?: ID
+  /** 複数台案件: 同じ日・同じ案件の車両をまとめるID と 何台目か */
+  groupId?: ID
+  groupIndex?: number
   /** 請求額 / 支払額（税抜, 円） */
   billAmount: number
   payAmount: number
