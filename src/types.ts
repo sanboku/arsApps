@@ -33,6 +33,9 @@ export interface RecurRule {
   interval: 1 | 2 | 0 // 1=毎週, 2=隔週, 0=開始週のみ（曜日選択時）
 }
 
+/** 固定業務（毎日固定の役割） / 定期案件（期間限定の定期案件など） */
+export type SeriesType = 'fixed' | 'regular'
+
 export interface Job {
   id: ID
   date: string // YYYY-MM-DD
@@ -44,14 +47,29 @@ export interface Job {
   pickupTime: string // HH:MM（空=未設定）
   dropoffTime: string
   note: string
-  /** 定期案件として一括生成された場合のシリーズID */
+  /** カードの色（未指定なら請求先の色） */
+  color?: string
+  /** 繰り返しで一括生成された場合のシリーズID と その設定 */
   seriesId?: ID
+  seriesType?: SeriesType
+  seriesRule?: RecurRule
+  seriesUntil?: string
   /** 複数台案件: 同じ日・同じ案件の車両をまとめるID と 何台目か */
   groupId?: ID
   groupIndex?: number
   /** 請求額 / 支払額（税抜, 円） */
   billAmount: number
   payAmount: number
+}
+
+/** 案件ではないメモ用カード */
+export interface Memo {
+  id: ID
+  date: string
+  driverId: ID | null // null = 担当者未定の行に表示
+  time: string
+  text: string
+  color: string
 }
 
 export interface Leave {
@@ -82,5 +100,6 @@ export interface DB {
   clients: Client[]
   jobs: Job[]
   leaves: Leave[]
+  memos: Memo[]
   vehicles: Vehicle[]
 }

@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Store } from '../store'
-import { addDays, byTime, fmtMD, holidayName, isPM, monthDays, parseYmd, routeText, today, uid, weekStart, ymd } from '../store'
-import type { DB, Job, Leave } from '../types'
-import { DriverOptions, JobForm, Modal } from '../components'
+import { addDays, byTime, fmtMD, holidayName, isPM, monthDays, parseYmd, routeText, textColorFor, today, uid, weekStart, ymd } from '../store'
+import type { DB, Job, Leave, Memo } from '../types'
+import { DriverOptions, JobForm, MemoForm, Modal } from '../components'
 
 type Row =
   | { kind: 'none'; key: string; label: string }
   | { kind: 'driver'; key: string; label: string; driverId: string }
   | { kind: 'company'; key: string; label: string; companyId: string; driverIds: string[] }
 
-type FormState = { initial: Partial<Job>; isNew: boolean; title?: string; basic?: boolean }
+type FormState = { initial: Partial<Job>; isNew: boolean; title?: string; fixed?: boolean }
+/** セルに並ぶもの：案件カード or メモカード */
+type Item = { kind: 'job'; j: Job; time: string } | { kind: 'memo'; m: Memo; time: string }
 type Mode = 'week' | 'month'
 
 export default function Schedule({ store }: { store: Store }) {
@@ -20,7 +22,8 @@ export default function Schedule({ store }: { store: Store }) {
   const [dayView, setDayView] = useState<string | null>(null)
   const [leaveOpen, setLeaveOpen] = useState(false)
   const [showHidden, setShowHidden] = useState(false)
-  const [pick, setPick] = useState<{ jobId: string; date: string; companyId: string; copy: boolean } | null>(null)
+  const [memoForm, setMemoForm] = useState<Partial<Memo> | null>(null)
+  const [pick, setPick] = useState<{ key: string; date: string; companyId: string; copy: boolean } | null>(null)
   const [overKey, setOverKey] = useState('')
   const [hoverGroup, setHoverGroup] = useState<string | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -29,7 +32,8 @@ export default function Schedule({ store }: { store: Store }) {
   const start = days[0]
   const end = days[days.length - 1]
   const rangeJobs = db.jobs.filter((j) => j.date >= start && j.date <= end)
-  const busy = new Set(rangeJobs.map((j) => j.driverId))
+  const rangeMemos = db.memos.filter((m) => m.date >= start && m.date <= end)
+  const busy = new Set([...rangeJobs.map((j) => j.driverId), ...rangeMemos.map((m) => m.driverId)])
   const visible = (id: string) => showHidden || busy.has(id) || db.drivers.find((d) => d.id === id)?.showOnCalendar
 
   // 複数台案件の「何台目/全何台」
@@ -63,18 +67,34 @@ export default function Schedule({ store }: { store: Store }) {
     wrap.scrollLeft = Math.max(0, el.offsetLeft - sticky - 8)
   }, [mode, start])
 
-  const jobsIn = (row: Row, date: string) =>
-    rangeJobs
-      .filter((j) => j.date === date && (row.kind === 'none' ? !j.driverId : row.kind === 'driver' ? j.driverId === row.driverId : row.driverIds.includes(j.driverId ?? '')))
-      .sort(byTime)
+  const inRow = (row: Row, driverId: string | null) =>
+    row.kind === 'none' ? !driverId : row.kind === 'driver' ? driverId === row.driverId : row.driverIds.includes(driverId ?? '')
+  /** セル内の案件とメモ（時間の早い順、時間未設定は先頭） */
+  const itemsIn = (row: Row, date: string): Item[] => {
+    const jobs = rangeJobs.filter((j) => j.date === date && inRow(row, j.driverId)).sort(byTime)
+    const memos = rangeMemos.filter((m) => m.date === date && inRow(row, m.driverId))
+    return [
+      ...jobs.map((j) => ({ kind: 'job' as const, j, time: j.pickupTime || j.dropoffTime })),
+      ...memos.map((m) => ({ kind: 'memo' as const, m, time: m.time })),
+    ].sort((a, b) => a.time.localeCompare(b.time))
+  }
+  const itemIsPM = (it: Item) => (it.kind === 'job' ? isPM(it.j) : it.time >= '12:00')
   const leaveOf = (driverId: string, date: string) => db.leaves.find((l) => l.driverId === driverId && l.date === date)
 
-  /** ドロップ時の処理。Ctrlキー（MacはOption）押しながらでコピー */
-  const moveJob = (jobId: string, date: string, driverId: string | null, copy: boolean) =>
+  /** ドロップ時の処理。key は "job:ID" または "memo:ID"。Ctrlキー（MacはOption）押しながらでコピー */
+  const moveItem = (key: string, date: string, driverId: string | null, copy: boolean) =>
     update((db) => {
+      const [kind, id] = key.split(':')
+      if (kind === 'memo') {
+        const m = db.memos.find((x) => x.id === id)
+        if (!m) return db
+        if (copy) return { ...db, memos: [...db.memos, { ...m, id: uid(), date, driverId }] }
+        return { ...db, memos: db.memos.map((x) => (x.id === id ? { ...x, date, driverId } : x)) }
+      }
+      const jobId = id
       const src = db.jobs.find((j) => j.id === jobId)
       if (!src) return db
-      if (copy) return { ...db, jobs: [...db.jobs, { ...src, id: uid(), date, driverId, seriesId: undefined, groupId: undefined, groupIndex: undefined }] }
+      if (copy) return { ...db, jobs: [...db.jobs, { ...src, id: uid(), date, driverId, seriesId: undefined, seriesType: undefined, seriesRule: undefined, seriesUntil: undefined, groupId: undefined, groupIndex: undefined }] }
       return { ...db, jobs: db.jobs.map((j) => (j.id === jobId ? { ...j, date, driverId } : j)) }
     })
 
@@ -82,14 +102,15 @@ export default function Schedule({ store }: { store: Store }) {
     e.preventDefault()
     setOverKey('')
     setHoverGroup(null)
-    const jobId = e.dataTransfer.getData('text/plain')
+    const key = e.dataTransfer.getData('text/plain')
     const copy = e.ctrlKey || e.altKey
-    const job = db.jobs.find((j) => j.id === jobId)
-    if (!job) return
-    if (row.kind === 'none') moveJob(jobId, date, null, copy)
-    else if (row.kind === 'driver') moveJob(jobId, date, row.driverId, copy)
-    else if (job.driverId && row.driverIds.includes(job.driverId)) moveJob(jobId, date, job.driverId, copy)
-    else setPick({ jobId, date, companyId: row.companyId, copy }) // 会社行へのドロップは担当者を選ぶ
+    const [kind, id] = key.split(':')
+    const item = kind === 'memo' ? db.memos.find((m) => m.id === id) : db.jobs.find((j) => j.id === id)
+    if (!item) return
+    if (row.kind === 'none') moveItem(key, date, null, copy)
+    else if (row.kind === 'driver') moveItem(key, date, row.driverId, copy)
+    else if (item.driverId && row.driverIds.includes(item.driverId)) moveItem(key, date, item.driverId, copy)
+    else setPick({ key, date, companyId: row.companyId, copy }) // 会社行へのドロップは担当者を選ぶ
   }
 
   const clientOf = (j: Job) => db.clients.find((c) => c.id === j.clientId)
@@ -102,14 +123,15 @@ export default function Schedule({ store }: { store: Store }) {
     const gNo = group.length > 1 ? [...group].sort((a, b) => (a.groupIndex ?? 0) - (b.groupIndex ?? 0)).findIndex((x) => x.id === j.id) + 1 : 0
     const time = [j.pickupTime, j.dropoffTime].filter(Boolean).join('〜')
     const text = mode === 'month' ? j.pickups.filter(Boolean)[0] ?? '—' : routeText(j)
+    const bg = j.color ?? c?.color ?? '#94a3b8'
     return (
       <div
         key={j.id}
         className={`job ${j.groupId && hoverGroup === j.groupId ? 'linked' : ''}`}
         draggable
-        style={{ background: c?.color ?? '#94a3b8' }}
+        style={{ background: bg, color: textColorFor(bg) }}
         onDragStart={(e) => {
-          e.dataTransfer.setData('text/plain', j.id)
+          e.dataTransfer.setData('text/plain', `job:${j.id}`)
           e.dataTransfer.effectAllowed = 'copyMove'
         }}
         onMouseEnter={() => j.groupId && setHoverGroup(j.groupId)}
@@ -122,11 +144,36 @@ export default function Schedule({ store }: { store: Store }) {
       >
         {showDriver && <span className="job-driver">{driverOf(j.driverId)?.displayName}</span>}
         {gNo > 0 && <span className="badge" title="複数台案件">{mode === 'week' && '🚚'}{gNo}/{group.length}</span>}
-        {j.seriesId && mode === 'week' && <span className="job-icon" title="定期案件">🔁</span>}
+        {j.seriesId && mode === 'week' && (j.seriesType === 'fixed' ? <span className="job-icon" title="固定業務">📌</span> : <span className="job-icon" title="定期案件">🔁</span>)}
         <span className="job-text">{text}</span>
       </div>
     )
   }
+
+  const renderMemo = (m: Memo, showDriver: boolean) => (
+    <div
+      key={m.id}
+      className="job memo"
+      draggable
+      style={{ background: m.color, color: textColorFor(m.color) }}
+      onDragStart={(e) => {
+        e.dataTransfer.setData('text/plain', `memo:${m.id}`)
+        e.dataTransfer.effectAllowed = 'copyMove'
+      }}
+      onClick={(e) => {
+        e.stopPropagation()
+        setMemoForm(m)
+      }}
+      title={[m.time && `時間: ${m.time}`, m.text].filter(Boolean).join('\n')}
+    >
+      {showDriver && m.driverId && <span className="job-driver">{driverOf(m.driverId)?.displayName}</span>}
+      <span className="job-icon">📝</span>
+      <span className="job-text">{m.text}</span>
+    </div>
+  )
+  const renderItem = (it: Item, showDriver: boolean) => (it.kind === 'job' ? renderCard(it.j, showDriver) : renderMemo(it.m, showDriver))
+  /** 新規登録の初期日付：表示範囲に今日があれば今日、なければ範囲の初日 */
+  const defaultDate = () => (start <= today() && today() <= end ? today() : start)
 
   const move = (n: number) => {
     if (mode === 'week') return setCursor(addDays(cursor, 7 * n))
@@ -151,16 +198,17 @@ export default function Schedule({ store }: { store: Store }) {
           <input type="date" value={cursor} onChange={(e) => e.target.value && setCursor(e.target.value)} />
         </div>
         <div className="row">
-          <button onClick={() => setForm({ initial: { date: start < today() && today() <= end ? today() : start }, isNew: true })}>＋ 案件登録</button>
-          <button className="secondary" onClick={() => setForm({ initial: { date: today() }, isNew: true, title: '基本割り当て登録（毎日固定の担当）', basic: true })}>基本割り当て</button>
+          <button onClick={() => setForm({ initial: { date: defaultDate() }, isNew: true })}>＋ 案件登録</button>
+          <button className="secondary" onClick={() => setForm({ initial: { date: defaultDate() }, isNew: true, title: '固定業務登録（毎日固定の担当）', fixed: true })}>固定業務登録</button>
+          <button className="secondary" onClick={() => setMemoForm({ date: defaultDate() })}>📝 メモ追加</button>
           <button className="secondary" onClick={() => setLeaveOpen(true)}>休暇登録</button>
           <label className="inline small"><input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} />非表示ドライバーも表示</label>
         </div>
       </div>
-      <p className="muted small">カードをドラッグで日付・担当を変更（Ctrl/Option を押しながらでコピー）。各マスは上段＝午前・下段＝午後（時間未設定は午前）。空きマスをクリックで案件登録、日付をクリックでその日の一覧。</p>
+      <p className="muted small">カードをドラッグで日付・担当を変更（Ctrl/Option を押しながらでコピー）。各ドライバーは上段＝AM・下段＝PM（時間未設定はAM）。空きマスまたはドライバー名の「＋」で案件登録、日付をクリックでその日の一覧。</p>
 
       <div className="sched-wrap" ref={wrapRef}>
-        <table className={`sched ${mode}`} style={mode === 'month' ? { minWidth: 160 + days.length * 104 } : undefined}>
+        <table className={`sched ${mode}`} style={mode === 'month' ? { minWidth: 180 + days.length * 104 } : undefined}>
           <colgroup>
             <col className="c-name" />
             <col className="c-half" />
@@ -186,16 +234,24 @@ export default function Schedule({ store }: { store: Store }) {
               (['am', 'pm'] as const).map((half) => (
                 <tr key={`${row.key}_${half}`} className={`${half} ${row.kind === 'none' ? 'row-none' : row.kind === 'company' ? 'row-company' : ''}`}>
                   {half === 'am' && (
-                    <th className="sticky" rowSpan={2}>
-                      {row.label}
-                      {row.kind === 'company' && <div className="muted small">{row.driverIds.length}名</div>}
+                    <th className="sticky" rowSpan={2} title={row.kind === 'company' ? `${row.label}（${row.driverIds.length}名）` : row.label}>
+                      <div className="row-head">
+                        <span className="row-name">{row.label}</span>
+                        <button
+                          className="add-btn"
+                          title="この担当で案件を追加"
+                          onClick={() => setForm({ initial: { date: defaultDate(), driverId: row.kind === 'driver' ? row.driverId : row.kind === 'company' ? row.driverIds[0] : null }, isNew: true })}
+                        >
+                          ＋
+                        </button>
+                      </div>
                     </th>
                   )}
-                  <th className="sticky2">{half === 'am' ? '午前' : '午後'}</th>
+                  <th className="sticky2">{half === 'am' ? 'AM' : 'PM'}</th>
                   {days.map((d) => {
                     const leave = row.kind === 'driver' ? leaveOf(row.driverId, d) : undefined
                     const k = `${row.key}_${half}_${d}`
-                    const list = jobsIn(row, d).filter((j) => isPM(j) === (half === 'pm'))
+                    const list = itemsIn(row, d).filter((it) => itemIsPM(it) === (half === 'pm'))
                     return (
                       <td
                         key={d}
@@ -216,7 +272,7 @@ export default function Schedule({ store }: { store: Store }) {
                             <button className="link small" onClick={(e) => { e.stopPropagation(); update((db) => ({ ...db, leaves: db.leaves.filter((l) => l.id !== leave.id) })) }}>取消</button>
                           </div>
                         )}
-                        {list.map((j) => renderCard(j, row.kind === 'company'))}
+                        {list.map((it) => renderItem(it, row.kind === 'company'))}
                       </td>
                     )
                   })}
@@ -229,7 +285,7 @@ export default function Schedule({ store }: { store: Store }) {
 
       <div className="legend">
         {db.clients.map((c) => <span key={c.id}><i style={{ background: c.color }} />{c.name}</span>)}
-        <span className="muted">🚚2/3 = 複数台案件の2台目（全3台）・カードにマウスを乗せると同じ案件の車両が強調表示</span>
+        <span className="muted">📌 固定業務　🔁 定期案件　📝 メモ　🚚2/3 = 複数台案件の2台目（全3台）・マウスを乗せると同じ案件の車両を強調</span>
       </div>
 
       {form && (
@@ -238,13 +294,14 @@ export default function Schedule({ store }: { store: Store }) {
           initial={form.initial}
           isNew={form.isNew}
           title={form.title}
-          defaultRule={form.basic ? { freq: 'dow', dows: [1, 2, 3, 4, 5], holidays: false, interval: 1 } : undefined}
+          defaultType={form.fixed ? 'fixed' : undefined}
           onSave={update}
           onDelete={update}
           onClose={() => setForm(null)}
         />
       )}
       {dayView && <DayView db={db} date={dayView} onClose={() => setDayView(null)} onOpen={(j) => { setDayView(null); setForm({ initial: j, isNew: false }) }} />}
+      {memoForm && <MemoForm db={db} initial={memoForm} onSave={update} onClose={() => setMemoForm(null)} />}
       {leaveOpen && <LeaveForm db={db} onClose={() => setLeaveOpen(false)} onSave={update} />}
       {pick && (
         <Modal title="担当者を選択" onClose={() => setPick(null)}>
@@ -252,7 +309,7 @@ export default function Schedule({ store }: { store: Store }) {
             <p>{db.companies.find((c) => c.id === pick.companyId)?.name} の誰に割り当てますか？</p>
             <div className="row wrap">
               {db.drivers.filter((d) => d.companyId === pick.companyId).map((d) => (
-                <button key={d.id} onClick={() => { moveJob(pick.jobId, pick.date, d.id, pick.copy); setPick(null) }}>{d.displayName}</button>
+                <button key={d.id} onClick={() => { moveItem(pick.key, pick.date, d.id, pick.copy); setPick(null) }}>{d.displayName}</button>
               ))}
             </div>
           </div>
@@ -265,9 +322,17 @@ export default function Schedule({ store }: { store: Store }) {
 function DayView({ db, date, onClose, onOpen }: { db: DB; date: string; onClose: () => void; onOpen: (j: Job) => void }) {
   const jobs = db.jobs.filter((j) => j.date === date).sort(byTime)
   const off = db.leaves.filter((l) => l.date === date).map((l) => db.drivers.find((d) => d.id === l.driverId)?.displayName)
+  const memos = db.memos.filter((m) => m.date === date).sort((a, b) => a.time.localeCompare(b.time))
   return (
     <Modal title={`${fmtMD(date)} の予定（${jobs.length}件）`} onClose={onClose}>
       {off.length > 0 && <p className="small">休暇：{off.join('、')}</p>}
+      {memos.length > 0 && (
+        <ul className="list small">
+          {memos.map((m) => (
+            <li key={m.id}><i className="dot" style={{ background: m.color }} />📝 {m.time && `${m.time} `}{m.driverId ? `[${db.drivers.find((d) => d.id === m.driverId)?.displayName}] ` : ''}{m.text}</li>
+          ))}
+        </ul>
+      )}
       <table>
         <thead><tr><th>時間</th><th>担当</th><th>請求先</th><th>内容</th><th>備考</th></tr></thead>
         <tbody>

@@ -95,7 +95,7 @@ tr.clickable:hover { background: #f1f5f9; }
 .sched th, .sched td { border-right: 1px solid var(--line); }
 .sched thead th { position: sticky; top: 0; z-index: 3; text-align: center; }
 .sched th.sticky { position: sticky; left: 0; z-index: 2; background: #f8fafc; }
-.sched col.c-name { width: 120px; }
+.sched col.c-name { width: 140px; }
 .sched col.c-half { width: 36px; }
 .sched thead th.sticky { z-index: 4; }
 .sched th.day { cursor: pointer; font-size: 13px; color: var(--text); }
@@ -106,7 +106,7 @@ tr.clickable:hover { background: #f1f5f9; }
 .sched td { padding: 2px 3px; height: 28px; cursor: pointer; position: relative; }
 .sched tr.am td, .sched tr.am .sticky2 { border-bottom: 1px dashed #d1d5db; }
 .sched tr.pm td { background-color: #00000005; }
-.sched th.sticky2 { position: sticky; left: 120px; z-index: 2; background: #f8fafc; padding: 2px; font-size: 10px; font-weight: 400; color: var(--muted); text-align: center; vertical-align: middle; }
+.sched th.sticky2 { position: sticky; left: 140px; z-index: 2; background: #f8fafc; padding: 2px; font-size: 10px; font-weight: 400; color: var(--muted); text-align: center; vertical-align: middle; }
 .sched td:hover { background: #f8fafc; }
 .sched td.today-col { background: #f5f9ff; }
 .sched td.over { background: #dbeafe; outline: 2px dashed var(--primary); outline-offset: -2px; }
@@ -118,9 +118,19 @@ tr.clickable:hover { background: #f1f5f9; }
 .leave-tag { position: absolute; top: 1px; right: 4px; font-size: 11px; font-weight: 700; color: var(--muted); display: flex; gap: 4px; }
 .job {
   color: #fff; border-radius: 4px; padding: 2px 5px; margin: 1px 0; font-size: 12px; line-height: 1.4;
-  cursor: grab; box-shadow: 0 1px 2px #0002; display: flex; gap: 3px; align-items: center; overflow: hidden; white-space: nowrap;
+  cursor: pointer; box-shadow: 0 1px 2px #0002; display: flex; gap: 3px; align-items: center; overflow: hidden; white-space: nowrap;
 }
 .job:active { cursor: grabbing; }
+.job.memo { border: 1px dashed #0004; border-radius: 2px; box-shadow: none; }
+.row-head { display: flex; align-items: center; gap: 4px; }
+.row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.add-btn { flex-shrink: 0; width: 22px; height: 22px; padding: 0; border-radius: 50%; font-size: 13px; line-height: 1; background: #fff; color: var(--primary); }
+.add-btn:hover { background: var(--primary); color: #fff; }
+.colors { gap: 6px; }
+.field .colors input[type='color'] { flex: 0 0 36px; }
+.swatch { width: 26px; height: 26px; padding: 0; border-radius: 6px; border: 2px solid transparent; box-shadow: inset 0 0 0 1px #0002; }
+.swatch.auto { width: auto; padding: 0 8px; font-size: 11px; }
+.swatch.on { border-color: #111; }
 .job.linked { outline: 2px solid #111; outline-offset: 1px; }
 .job-driver { font-weight: 700; background: #0003; border-radius: 3px; padding: 0 3px; flex-shrink: 0; }
 .job-icon { flex-shrink: 0; font-size: 10px; }
@@ -174,9 +184,9 @@ tr.clickable:hover { background: #f1f5f9; }
   .topbar .user { margin-left: auto; }
   .toolbar .row { flex-wrap: wrap; }
   .inline { white-space: nowrap; }
-  .sched col.c-name { width: 80px; }
+  .sched col.c-name { width: 96px; }
   .sched th.sticky { font-size: 12px; }
-  .sched th.sticky2 { left: 80px; }
+  .sched th.sticky2 { left: 96px; }
   .sched { min-width: 760px; }
 }
 

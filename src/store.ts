@@ -56,13 +56,24 @@ export const routeText = (j: Job) => {
   return d ? `${p || '—'} → ${d}` : p || '—'
 }
 
+/** 背景色に対して読みやすい文字色 */
+export const textColorFor = (hex: string) => {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex)
+  if (!m) return '#fff'
+  const [r, g, b] = m.slice(1).map((x) => parseInt(x, 16))
+  return r * 0.299 + g * 0.587 + b * 0.114 > 160 ? '#1f2937' : '#fff'
+}
+
+export const CARD_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#64748b', '#fde68a', '#bbf7d0', '#bfdbfe', '#fecaca']
+
 export const WEEKDAYS_MON_FIRST = [1, 2, 3, 4, 5, 6, 0]
 
 /** 定期案件の発生日を列挙 */
 export function recurDates(start: string, end: string, rule: RecurRule): string[] {
   const out: string[] = []
   const ws = weekStart(start)
-  const last = rule.freq === 'dow' && rule.interval === 0 ? addDays(ws, 6) : end
+  // 終了日未定の場合は1年先まで作成
+  const last = rule.freq === 'dow' && rule.interval === 0 ? addDays(ws, 6) : end || addDays(start, 365)
   for (let d = start; d <= last && out.length < 400; d = addDays(d, 1)) {
     if (!rule.holidays && holidayName(d)) continue
     if (rule.freq === 'dow') {
@@ -110,15 +121,21 @@ function seed(): DB {
     ],
     jobs: [],
     leaves: [{ id: uid(), driverId: 'd3', date: addDays(ws, 2) }],
+    memos: [
+      { id: uid(), date: addDays(ws, 1), driverId: null, time: '', text: '〇〇物流 年末増便の打診あり', color: '#fde68a' },
+      { id: uid(), date: addDays(ws, 3), driverId: 'd2', time: '13:00', text: '車両点検（午後）', color: '#bfdbfe' },
+    ],
     vehicles: [
       { id: 'v1', plate: '品川 480 あ 12-34', name: 'ハイゼット', inspectionDate: addDays(today(), 20), lentTo: '佐藤', lastUsed: addDays(today(), -1), repairs: [{ date: addDays(today(), -60), description: 'タイヤ交換', cost: 32000 }] },
       { id: 'v2', plate: '品川 480 い 56-78', name: 'エブリイ', inspectionDate: addDays(today(), 200), lentTo: '', lastUsed: addDays(today(), -10), repairs: [] },
     ],
   }
-  // 山田さんは毎日固定（基本割り当て）
+  // 山田さんは毎日固定（固定業務）
   const sid = uid()
-  for (const d of recurDates(ws, addDays(ws, 34), { freq: 'dow', dows: [1, 2, 3, 4, 5], holidays: false, interval: 1 }))
-    db.jobs.push(emptyJob({ date: d, driverId: 'd1', clientId: 'k1', pickups: ['〇〇便業務'], dropoffs: [], pickupTime: '08:00', seriesId: sid, billAmount: 25000, payAmount: 18000, note: '固定ルート' }))
+  const fixedRule: RecurRule = { freq: 'dow', dows: [1, 2, 3, 4, 5], holidays: false, interval: 1 }
+  const fixedUntil = addDays(ws, 34)
+  for (const d of recurDates(ws, fixedUntil, fixedRule))
+    db.jobs.push(emptyJob({ date: d, driverId: 'd1', clientId: 'k1', pickups: ['〇〇便業務'], dropoffs: [], pickupTime: '08:00', seriesId: sid, seriesType: 'fixed', seriesRule: fixedRule, seriesUntil: fixedUntil, billAmount: 25000, payAmount: 18000, note: '固定ルート' }))
   const gid = uid()
   db.jobs.push(
     emptyJob({ date: addDays(ws, 1), driverId: 'd2', clientId: 'k2', pickups: ['△△商事 川崎倉庫'], dropoffs: ['横浜市内', '藤沢市'], pickupTime: '13:30', dropoffTime: '16:00', billAmount: 30000, payAmount: 22000 }),
@@ -135,7 +152,7 @@ const KEY = 'arsapps-db-v2' // データ構造を変えたらバージョンを�
 const load = (): DB => {
   try {
     const raw = localStorage.getItem(KEY)
-    if (raw) return JSON.parse(raw)
+    if (raw) return { memos: [], ...JSON.parse(raw) } // 後から追加した項目は空で補う
   } catch {
     /* noop */
   }
