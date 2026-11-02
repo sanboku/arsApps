@@ -66,6 +66,25 @@ export const textColorFor = (hex: string) => {
 
 export const CARD_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#64748b', '#fde68a', '#bbf7d0', '#bfdbfe', '#fecaca']
 
+/**
+ * 予定表の行の並び順（"d:ID" = 自社・個人ドライバー, "c:ID" = 委託会社）。
+ * rowOrder に無い行は 正社員 → 個人 → 会社 の順で末尾に追加する。
+ */
+export function orderedRowKeys(db: DB): string[] {
+  const all = [
+    ...db.drivers.filter((d) => d.kind === 'employee').map((d) => `d:${d.id}`),
+    ...db.drivers.filter((d) => d.kind === 'individual').map((d) => `d:${d.id}`),
+    ...db.companies.map((c) => `c:${c.id}`),
+  ]
+  const valid = new Set(all)
+  const saved = (db.rowOrder ?? []).filter((k) => valid.has(k))
+  return [...saved, ...all.filter((k) => !saved.includes(k))]
+}
+
+/** 指定ドライバーの、ある月（YYYY-MM）の休暇日数 */
+export const leaveCount = (db: DB, driverId: string, ym: string) =>
+  db.leaves.filter((l) => l.driverId === driverId && l.date.startsWith(ym)).length
+
 export const WEEKDAYS_MON_FIRST = [1, 2, 3, 4, 5, 6, 0]
 
 /** 定期案件の発生日を列挙 */
@@ -120,7 +139,7 @@ function seed(): DB {
       { id: 'k3', name: '□□ネット通販', color: '#f59e0b' },
     ],
     jobs: [],
-    leaves: [{ id: uid(), driverId: 'd3', date: addDays(ws, 2) }],
+    leaves: [{ id: uid(), driverId: 'd3', date: addDays(ws, 2) }, { id: uid(), driverId: 'd1', date: addDays(ws, 5) }],
     memos: [
       { id: uid(), date: addDays(ws, 1), driverId: null, time: '', text: '〇〇物流 年末増便の打診あり', color: '#fde68a' },
       { id: uid(), date: addDays(ws, 3), driverId: 'd2', time: '13:00', text: '車両点検（午後）', color: '#bfdbfe' },

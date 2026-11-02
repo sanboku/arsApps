@@ -102,4 +102,6 @@ export interface DB {
   leaves: Leave[]
   memos: Memo[]
   vehicles: Vehicle[]
+  /** 予定表の行の並び順（"d:ドライバーID" / "c:会社ID"）。会社内の並びは drivers の配列順 */
+  rowOrder?: string[]
 }

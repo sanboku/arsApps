@@ -15,8 +15,9 @@ npm run dev      # http://localhost:5173 を開く
 ## サンプル版の制約
 
 - データはブラウザの localStorage に保存（他のPC・スマホとは共有されない）。
-  初期データに戻すには、ブラウザの開発者ツールで localStorage の `arsapps-db-v1` を削除する。
+  初期データに戻すには、ブラウザの開発者ツールで localStorage の `arsapps-db-v2` を削除する。
 - ログインは画面上のチェックのみ。本番では Supabase Auth 等に置き換える。
 - ドラッグ&ドロップはPCブラウザ向け。スマホではカードをタップして日付・担当を変更する。
 
-本番化の方針・要件は [docs/requirements.md](docs/requirements.md) を参照。
+- 操作説明書：[docs/manual.md](docs/manual.md)
+- 本番化の方針・要件：[docs/requirements.md](docs/requirements.md)

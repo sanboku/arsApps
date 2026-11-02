@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Store } from '../store'
-import { today, uid } from '../store'
+import { orderedRowKeys, today, uid } from '../store'
 import type { Driver, DriverKind } from '../types'
 import { JobForm, Modal } from '../components'
 
@@ -43,6 +43,7 @@ export default function Drivers({ store }: { store: Store }) {
         </table>
       </div>
 
+      <RowOrderEditor store={store} />
       <CompanyEditor store={store} />
 
       {edit && <DriverForm store={store} initial={edit} onClose={() => setEdit(null)} />}
@@ -117,6 +118,63 @@ function CompanyEditor({ store }: { store: Store }) {
         <input placeholder="会社名" value={name} onChange={(e) => setName(e.target.value)} />
         <button onClick={() => { if (!name) return; update((db) => ({ ...db, companies: [...db.companies, { id: uid(), name }] })); setName('') }}>追加</button>
       </div>
+    </section>
+  )
+}
+
+/** 予定表の行の並び順。会社内のドライバーの並びも変更できる */
+function RowOrderEditor({ store }: { store: Store }) {
+  const { db, update } = store
+  const keys = orderedRowKeys(db)
+  const swap = <T,>(arr: T[], i: number, j: number) => {
+    const a = [...arr]
+    ;[a[i], a[j]] = [a[j], a[i]]
+    return a
+  }
+  const moveRow = (i: number, dir: -1 | 1) => update((db) => ({ ...db, rowOrder: swap(orderedRowKeys(db), i, i + dir) }))
+  const moveInCompany = (driverId: string, dir: -1 | 1) =>
+    update((db) => {
+      const d = db.drivers.find((x) => x.id === driverId)!
+      const same = db.drivers.filter((x) => x.companyId === d.companyId)
+      const k = same.findIndex((x) => x.id === driverId)
+      const other = same[k + dir]
+      if (!other) return db
+      const i = db.drivers.indexOf(d)
+      const j = db.drivers.indexOf(other)
+      return { ...db, drivers: swap(db.drivers, i, j) }
+    })
+  const label = (key: string) => {
+    const [t, id] = key.split(':')
+    if (t === 'c') return `🏢 ${db.companies.find((c) => c.id === id)?.name}`
+    const d = db.drivers.find((x) => x.id === id)!
+    return `${d.displayName}${d.kind === 'employee' ? '（社員）' : ''}${d.showOnCalendar ? '' : '　※通常非表示'}`
+  }
+  return (
+    <section className="card">
+      <h3>予定表の表示順</h3>
+      <p className="muted small">▲▼で予定表の行の順番を変えられます。委託会社の中のドライバーの順番も変更できます。</p>
+      <ol className="order-list">
+        {keys.map((k, i) => (
+          <li key={k}>
+            <div className="row">
+              <span className="spacer">{label(k)}</span>
+              <button className="ghost small" disabled={i === 0} onClick={() => moveRow(i, -1)} aria-label="上へ">▲</button>
+              <button className="ghost small" disabled={i === keys.length - 1} onClick={() => moveRow(i, 1)} aria-label="下へ">▼</button>
+            </div>
+            {k.startsWith('c:') && (
+              <ol className="order-list inner">
+                {db.drivers.filter((d) => d.companyId === k.slice(2)).map((d, j, arr) => (
+                  <li key={d.id} className="row">
+                    <span className="spacer">{d.displayName}</span>
+                    <button className="ghost small" disabled={j === 0} onClick={() => moveInCompany(d.id, -1)} aria-label="上へ">▲</button>
+                    <button className="ghost small" disabled={j === arr.length - 1} onClick={() => moveInCompany(d.id, 1)} aria-label="下へ">▼</button>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </li>
+        ))}
+      </ol>
     </section>
   )
 }

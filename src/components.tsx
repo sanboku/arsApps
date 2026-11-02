@@ -2,10 +2,10 @@ import { useState, type ReactNode } from 'react'
 import type { DB, Job, Memo, RecurRule, SeriesType } from './types'
 import { CARD_COLORS, WEEKDAYS, WEEKDAYS_MON_FIRST, emptyJob, recurDates, textColorFor, today, uid } from './store'
 
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
+      <div className={`modal ${wide ? 'wide' : ''}`}>
         <div className="modal-head">
           <h3>{title}</h3>
           <button className="ghost" onClick={onClose} aria-label="閉じる">✕</button>
@@ -126,6 +126,10 @@ export function JobForm({ db, initial, isNew, title, defaultType, onSave, onDele
     const clean = { ...job, pickups: job.pickups.filter(Boolean), dropoffs: job.dropoffs.filter(Boolean) }
     if (!clean.pickups.length) return alert('積み地（または業務名）を入力してください')
     if (!validateRule()) return
+    if (clean.driverId && db.leaves.some((l) => l.driverId === clean.driverId && l.date === clean.date)) {
+      const name = db.drivers.find((d) => d.id === clean.driverId)?.displayName
+      if (!confirm(`${name} さんは ${clean.date} が休暇です。このまま保存しますか？`)) return
+    }
 
     if (isNew) {
       const dates = seriesType ? recurDates(clean.date, until, rule) : [clean.date]
@@ -206,8 +210,9 @@ export function JobForm({ db, initial, isNew, title, defaultType, onSave, onDele
   const clientColor = db.clients.find((c) => c.id === job.clientId)?.color ?? '#94a3b8'
 
   return (
-    <Modal title={title ?? (isNew ? '案件登録' : '案件編集')} onClose={onClose}>
-      <div className="form">
+    <Modal title={title ?? (isNew ? '案件登録' : '案件編集')} onClose={onClose} wide>
+      <div className="job-form">
+      <div className="form col">
         <div className="grid2">
           <label className="field"><span>日付{isNew && seriesType ? '（開始日）' : ''}</span>
             <input type="date" value={job.date} onChange={(e) => set('date', e.target.value)} />
@@ -252,6 +257,8 @@ export function JobForm({ db, initial, isNew, title, defaultType, onSave, onDele
           <ColorPicker value={job.color} fallback={clientColor} onChange={(v) => set('color', v)} />
         </div>
         {isNew && vehicles > 1 && <p className="small muted">台数分のカードを作成します。2台目以降は「担当者未定」に入るので、予定表でドラッグして割り当ててください。</p>}
+      </div>
+      <div className="form col">
 
         {!isNew && (
           <div className="boxed">
@@ -332,10 +339,6 @@ export function JobForm({ db, initial, isNew, title, defaultType, onSave, onDele
           {typeOnlyChanged && seriesType && <p className="small muted">このシリーズのカードをすべて「{SERIES_LABEL[seriesType]}」に変更します。</p>}
         </div>
 
-        <label className="field"><span>備考</span>
-          <textarea rows={2} value={job.note} onChange={(e) => set('note', e.target.value)} />
-        </label>
-
         {inSeries && !ruleChanged && (
           <div className="boxed">
             <span className="small">この案件は{SERIES_LABEL[origType || 'regular']}です。変更の反映範囲：</span>
@@ -343,7 +346,10 @@ export function JobForm({ db, initial, isNew, title, defaultType, onSave, onDele
             <label className="inline"><input type="radio" checked={scope === 'future'} onChange={() => setScope('future')} />この日以降すべて</label>
           </div>
         )}
-
+      </div>
+        <label className="field note-field"><span>備考</span>
+          <textarea rows={2} value={job.note} onChange={(e) => set('note', e.target.value)} />
+        </label>
         <div className="actions">
           {!isNew && onDelete && (
             <>
