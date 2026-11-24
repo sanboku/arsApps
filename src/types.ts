@@ -75,6 +75,8 @@ export interface Job {
   payAmount: number
   /** 距離（km）。後から手入力、または単価マスタの標準距離 */
   distance?: number
+  /** 立替金（高速代・駐車代など。税込の実費で、請求・支払とも同額を消費税なしで計上） */
+  advance?: number
   /** 適用した単価（単価マスタ） */
   rateId?: ID
 }
@@ -100,7 +102,8 @@ export interface Rate {
 export interface DocLine {
   date: string
   text: string
-  amount: number
+  advance?: number // 立替金（税込）
+  amount: number // 金額（税抜）
 }
 export interface BillingDoc {
   id: ID
@@ -118,6 +121,8 @@ export interface BillingDoc {
   edited: boolean
   /** 消費税を計算しない（免税の個人ドライバーへの支払など） */
   noTax?: boolean
+  /** 作成時の管理表の合計（金額＋立替金）。管理表がその後変わったかの判定に使う */
+  sourceTotal?: number
 }
 
 /** 自社情報（帳票の発行元） */

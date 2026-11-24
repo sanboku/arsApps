@@ -4,7 +4,7 @@ import type { Payee, Store } from '../store'
 import { fmtMD, isClosed, payeeOf, profitRate, routeText, today, uid, yen } from '../store'
 import type { BillingDoc, Job, Rate, Settings } from '../types'
 import { JobForm, Modal } from '../components'
-import DocEditor, { buildDoc } from './DocEditor'
+import DocEditor, { buildDoc, partyTotal } from './DocEditor'
 
 type Tab = 'ledger' | 'client' | 'payee' | 'docs' | 'rates' | 'settings'
 const TABS: [Tab, string][] = [
@@ -23,15 +23,16 @@ const rateText = (bill: number, pay: number) => {
 
 /** 請求先・支払先ごとの集計 */
 function summarize(jobs: Job[], keyOf: (j: Job) => { key: string; label: string; official?: string } | null) {
-  const m = new Map<string, { key: string; label: string; official?: string; count: number; bill: number; pay: number; distance: number }>()
+  const m = new Map<string, { key: string; label: string; official?: string; count: number; bill: number; pay: number; distance: number; advance: number }>()
   for (const j of jobs) {
     const k = keyOf(j)
     if (!k) continue
-    const v = m.get(k.key) ?? { ...k, count: 0, bill: 0, pay: 0, distance: 0 }
+    const v = m.get(k.key) ?? { ...k, count: 0, bill: 0, pay: 0, distance: 0, advance: 0 }
     v.count++
     v.bill += j.billAmount
     v.pay += j.payAmount
     v.distance += j.distance ?? 0
+    v.advance += j.advance ?? 0
     m.set(k.key, v)
   }
   return [...m.values()]
@@ -56,23 +57,28 @@ export default function Billing({ store }: { store: Store }) {
     bill: jobs.reduce((s, j) => s + j.billAmount, 0),
     pay: jobs.reduce((s, j) => s + j.payAmount, 0),
     distance: jobs.reduce((s, j) => s + (j.distance ?? 0), 0),
+    advance: jobs.reduce((s, j) => s + (j.advance ?? 0), 0),
   }
   const unassigned = monthJobs.filter((j) => !j.driverId).length
   const noAmount = monthJobs.filter((j) => !j.billAmount).length
   const noClient = monthJobs.filter((j) => !j.clientId).length
 
   const byClient = summarize(monthJobs, (j) => (client(j) ? { key: `client:${j.clientId}`, label: client(j)!.name, official: client(j)!.officialName } : { key: 'client:none', label: '（請求先未設定）' }))
+  // 支払先ごと。自社正社員は支払はないが、売上を見るために1人ずつ分けて集計する
   const byPayee = summarize(monthJobs, (j) => {
     const p = payee(j)
-    return p ? { key: p.key, label: p.kind === 'driver' ? `${p.short}（個人）` : p.short, official: p.officialName } : { key: 'none', label: '（担当者未定）' }
-  })
+    if (!p) return { key: 'none', label: '（担当者未定）' }
+    if (p.kind === 'self') return { key: `self:${j.driverId}`, label: `${driver(j)?.displayName}（自社正社員）` }
+    return { key: p.key, label: p.kind === 'driver' ? `${p.short}（個人）` : p.short, official: p.officialName }
+  }).sort((a, b) => Number(a.key.startsWith('self:')) - Number(b.key.startsWith('self:')))
+  const selfRows = byPayee.filter((r) => r.key.startsWith('self:'))
   const payees = [...new Map(db.drivers.map((d) => payeeOf(db, d.id)).filter((p): p is Payee => !!p).map((p) => [p.key, p])).values()]
 
   const setJob = (id: string, patch: Partial<Job>) => update((db) => ({ ...db, jobs: db.jobs.map((j) => (j.id === id ? { ...j, ...patch } : j)) }))
 
   const close = () => {
     const warn = [unassigned && `担当者未定：${unassigned}件`, noClient && `請求先未設定：${noClient}件`, noAmount && `請求額が0円：${noAmount}件`].filter(Boolean)
-    const msg = `${month.replace('-', '年')}月を締めますか？\n締めると、この月の案件・金額は変更できなくなり、帳票（請求書・支払明細）を作成できるようになります。${warn.length ? `\n\n【確認】\n${warn.join('\n')}` : ''}`
+    const msg = `${month.replace('-', '年')}月を締めますか？\n締めると、この月の案件・金額は変更できなくなります。${warn.length ? `\n\n【確認】\n${warn.join('\n')}` : ''}`
     if (!confirm(msg)) return
     update((db) => ({ ...db, closedMonths: [...db.closedMonths, month] }))
     setTab('docs')
@@ -89,6 +95,7 @@ export default function Billing({ store }: { store: Store }) {
       所属: payee(j)?.kind === 'driver' ? '個人' : payee(j)?.short ?? '',
       内容: routeText(j),
       距離km: j.distance ?? '',
+      立替金: j.advance ?? '',
       請求先: client(j)?.name ?? '',
       請求額: j.billAmount,
       支払額: j.payAmount,
@@ -146,14 +153,15 @@ export default function Billing({ store }: { store: Store }) {
             </p>
           )}
           <p className="small muted">
-            予定表の案件カードと連動しています。カードを追加するとこの表に行が増え、ここで金額・距離を直すとカードにも反映されます。内容をクリックするとカードの編集画面が開きます。
+            予定表の案件カードと連動しています。カードを追加するとこの表に行が増え、ここで距離・立替金・金額を直すとカードにも反映されます。内容をクリックするとカードの編集画面が開きます。
+            立替金（高速代・駐車代など）は税込の実費で、請求書・支払明細書に消費税なしで同額を載せます。
             {closed && ' この月は締め済みのため変更できません。'}
           </p>
           <div className="scroll-x">
             <table className="ledger">
               <thead>
                 <tr>
-                  <th>日付</th><th>担当者</th><th>所属</th><th>内容</th><th className="right">距離(km)</th><th>請求先</th>
+                  <th>日付</th><th>担当者</th><th>所属</th><th>内容</th><th className="right">距離(km)</th><th className="right">立替金</th><th>請求先</th>
                   <th className="right">請求額</th><th className="right">支払額</th><th className="right">利益率</th>
                 </tr>
               </thead>
@@ -168,6 +176,7 @@ export default function Billing({ store }: { store: Store }) {
                       <td className="nowrap">{p ? (p.kind === 'driver' ? <span className="muted">個人</span> : p.short) : '—'}</td>
                       <td><button className="link" onClick={() => setEditJob(j)}>{routeText(j)}</button>{j.groupId && <span className="small muted">（複数台）</span>}</td>
                       <td className="right"><input className="num short" type="number" min={0} disabled={closed} value={j.distance ?? ''} onChange={(e) => setJob(j.id, { distance: e.target.value === '' ? undefined : +e.target.value })} /></td>
+                      <td className="right"><input className="num mid" type="number" min={0} disabled={closed} value={j.advance || ''} onChange={(e) => setJob(j.id, { advance: e.target.value === '' ? undefined : +e.target.value })} /></td>
                       <td className="nowrap"><i className="dot" style={{ background: client(j)?.color }} />{client(j)?.name ?? <span className="danger">未設定</span>}</td>
                       <td className="right"><input className="num" type="number" min={0} disabled={closed} value={j.billAmount} onChange={(e) => setJob(j.id, { billAmount: +e.target.value })} /></td>
                       <td className="right"><input className="num" type="number" min={0} disabled={closed} value={j.payAmount} onChange={(e) => setJob(j.id, { payAmount: +e.target.value })} /></td>
@@ -180,6 +189,7 @@ export default function Billing({ store }: { store: Store }) {
                 <tr>
                   <th colSpan={4}>合計（{jobs.length}件）</th>
                   <th className="right">{total.distance.toLocaleString()}</th>
+                  <th className="right">{yen(total.advance)}</th>
                   <th></th>
                   <th className="right">{yen(total.bill)}</th>
                   <th className="right">{yen(total.pay)}</th>
@@ -191,24 +201,59 @@ export default function Billing({ store }: { store: Store }) {
         </div>
       )}
 
-      {(tab === 'client' || tab === 'payee') && (
+      {tab === 'client' && (
         <div className="card scroll-x">
           <table>
-            <thead><tr><th>{tab === 'client' ? '請求先' : '支払先'}</th><th>正式名称</th><th className="right">件数</th><th className="right">距離(km)</th><th className="right">{tab === 'client' ? '請求額' : '支払額'}</th>{tab === 'client' && <th className="right">利益率</th>}</tr></thead>
+            <thead><tr><th>請求先</th><th>正式名称</th><th className="right">件数</th><th className="right">距離(km)</th><th className="right">立替金</th><th className="right">請求額（税抜）</th><th className="right">利益率</th></tr></thead>
             <tbody>
-              {(tab === 'client' ? byClient : byPayee).map((r) => (
+              {byClient.map((r) => (
                 <tr key={r.key}>
                   <td>{r.label}</td>
                   <td className="muted">{r.official ?? ''}</td>
                   <td className="right">{r.count}</td>
                   <td className="right">{r.distance.toLocaleString()}</td>
-                  <td className="right">{yen(tab === 'client' ? r.bill : r.pay)}</td>
-                  {tab === 'client' && <td className="right">{rateText(r.bill, r.pay)}</td>}
+                  <td className="right">{yen(r.advance)}</td>
+                  <td className="right">{yen(r.bill)}</td>
+                  <td className="right">{rateText(r.bill, r.pay)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {tab === 'payee' && <p className="small muted">「自社」は自社正社員の案件です（支払明細は作成しません）。</p>}
+        </div>
+      )}
+
+      {tab === 'payee' && (
+        <div className="card scroll-x">
+          <table>
+            <thead><tr><th>支払先（担当）</th><th>正式名称</th><th className="right">件数</th><th className="right">距離(km)</th><th className="right">立替金</th><th className="right">売上（請求額）</th><th className="right">支払額</th><th className="right">利益率</th></tr></thead>
+            <tbody>
+              {byPayee.map((r) => (
+                <tr key={r.key} className={r.key.startsWith('self:') ? 'self-row' : ''}>
+                  <td>{r.label}</td>
+                  <td className="muted">{r.official ?? ''}</td>
+                  <td className="right">{r.count}</td>
+                  <td className="right">{r.distance.toLocaleString()}</td>
+                  <td className="right">{yen(r.advance)}</td>
+                  <td className="right">{yen(r.bill)}</td>
+                  <td className="right">{r.key.startsWith('self:') ? <span className="muted">支払なし</span> : yen(r.pay)}</td>
+                  <td className="right">{rateText(r.bill, r.pay)}</td>
+                </tr>
+              ))}
+            </tbody>
+            {selfRows.length > 0 && (
+              <tfoot>
+                <tr>
+                  <th colSpan={2}>自社正社員の売上 合計</th>
+                  <th className="right">{selfRows.reduce((s, r) => s + r.count, 0)}</th>
+                  <th className="right">{selfRows.reduce((s, r) => s + r.distance, 0).toLocaleString()}</th>
+                  <th className="right">{yen(selfRows.reduce((s, r) => s + r.advance, 0))}</th>
+                  <th className="right">{yen(selfRows.reduce((s, r) => s + r.bill, 0))}</th>
+                  <th></th><th></th>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+          <p className="small muted">自社正社員は支払明細の対象外ですが、売上（請求額）は1人ずつ集計しています。</p>
         </div>
       )}
 
@@ -230,7 +275,7 @@ export default function Billing({ store }: { store: Store }) {
   )
 }
 
-/** 帳票タブ：締め後に、請求先ごとの請求書・支払先ごとの支払明細書を作成・編集・PDF出力 */
+/** 帳票タブ：請求先ごとの請求書・支払先ごとの支払明細書を作成・編集・PDF出力（締め前でも作成できる） */
 function DocsTab({ store, month, closed, onClose, onOpen, byClient, byPayee }: {
   store: Store
   month: string
@@ -241,13 +286,6 @@ function DocsTab({ store, month, closed, onClose, onOpen, byClient, byPayee }: {
   byPayee: ReturnType<typeof summarize>
 }) {
   const { db, update } = store
-  if (!closed)
-    return (
-      <div className="card">
-        <p>帳票は、月を締めてから作成します。金額などを確認したら「この月を締める」を押してください。</p>
-        <button onClick={onClose}>この月を締める</button>
-      </div>
-    )
   const docOf = (kind: BillingDoc['kind'], key: string) => db.docs.find((d) => d.month === month && d.kind === kind && d.partyKey === key)
   /** 帳票を開く（なければ管理表から作成） */
   const open = (kind: BillingDoc['kind'], key: string) => {
@@ -260,18 +298,24 @@ function DocsTab({ store, month, closed, onClose, onOpen, byClient, byPayee }: {
   }
   const section = (kind: BillingDoc['kind'], rows: ReturnType<typeof summarize>) => (
     <table>
-      <thead><tr><th>宛先（略称）</th><th>正式名称</th><th className="right">件数</th><th className="right">金額（税抜）</th><th>状態</th><th></th></tr></thead>
+      <thead><tr><th>宛先（略称）</th><th>正式名称</th><th className="right">件数</th><th className="right">金額（税抜）</th><th className="right">立替金</th><th>状態</th><th></th></tr></thead>
       <tbody>
-        {rows.map((r) => {
-          const ok = !r.key.endsWith(':none') && r.key !== 'none' && r.key !== 'self'
+        {rows.filter((r) => r.key.startsWith('client:') || r.key.startsWith('company:') || r.key.startsWith('driver:')).map((r) => {
+          const ok = r.key !== 'client:none'
           const doc = docOf(kind, r.key)
+          // 帳票を作った後に管理表（金額・立替金）が変わっていたら知らせる
+          const changed = doc && doc.sourceTotal !== undefined && doc.sourceTotal !== partyTotal(db, month, kind, r.key)
           return (
             <tr key={r.key}>
               <td>{r.label}</td>
               <td className="muted">{r.official ?? ''}</td>
               <td className="right">{r.count}</td>
               <td className="right">{yen(kind === 'invoice' ? r.bill : r.pay)}</td>
-              <td>{!ok ? <span className="muted">対象外</span> : !doc ? <span className="muted">未作成</span> : doc.edited ? '編集済み' : '作成済み'}</td>
+              <td className="right">{r.advance ? yen(r.advance) : '—'}</td>
+              <td>
+                {!ok ? <span className="muted">対象外</span> : !doc ? <span className="muted">未作成</span> : doc.edited ? '編集済み' : '作成済み'}
+                {changed && <div className="small warn-text">作成後に管理表が変わっています</div>}
+              </td>
               <td className="nowrap">{ok && <button className="small" onClick={() => open(kind, r.key)}>{doc ? '開く' : '作成して開く'}</button>}</td>
             </tr>
           )
@@ -281,6 +325,12 @@ function DocsTab({ store, month, closed, onClose, onOpen, byClient, byPayee }: {
   )
   return (
     <>
+      {!closed && (
+        <div className="notice">
+          この月はまだ締めていません。帳票は今すぐ作れますが、このあと案件や金額を変えると帳票と合わなくなります（その場合は「作成後に管理表が変わっています」と表示されるので、帳票の「管理表から作り直す」で更新してください）。
+          <button className="small" onClick={onClose}>この月を締める</button>
+        </div>
+      )}
       <div className="card">
         <h3>請求書（請求先ごと）</h3>
         {section('invoice', byClient)}
@@ -288,7 +338,7 @@ function DocsTab({ store, month, closed, onClose, onOpen, byClient, byPayee }: {
       <div className="card">
         <h3>支払明細書（支払先ごと）</h3>
         {section('payment', byPayee)}
-        <p className="small muted">自社正社員・担当者未定の案件は支払明細の対象外です。</p>
+        <p className="small muted">自社正社員・担当者未定の案件は支払明細の対象外です（自社正社員の売上は「支払先別」タブで確認できます）。</p>
       </div>
     </>
   )

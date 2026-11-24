@@ -171,6 +171,7 @@ tr.clickable:hover { background: #f1f5f9; }
 .job-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 20px; align-content: start; }
 .job-form > .note-field, .job-form > .actions, .job-form > .job-form-header { grid-column: 1 / -1; }
 .reg-tabs { align-self: start; justify-self: start; }
+.job-form .rate-row { grid-template-columns: 2fr 1fr 1fr; }
 .job-form .form { gap: 8px; align-content: start; }
 .job-form .boxed { padding: 8px 10px; }
 .job-form input, .job-form select, .job-form textarea { padding: 5px 8px; }
@@ -227,6 +228,9 @@ tr.clickable:hover { background: #f1f5f9; }
 .ledger th { white-space: nowrap; }
 .ledger input.num { width: 96px; padding: 3px 6px; }
 .ledger input.num.short { width: 64px; }
+.ledger input.num.mid { width: 80px; }
+tr.self-row td { background: #f0f9ff; }
+.notice { background: #fffbeb; border: 1px solid #f59e0b; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 13px; display: flex; gap: 12px; align-items: center; justify-content: space-between; }
 .ledger tfoot th { background: #f8fafc; color: var(--text); font-size: 13px; }
 .ledger .link { text-align: left; color: var(--text); }
 .ledger .link:hover { color: var(--primary); text-decoration: underline; }
@@ -266,8 +270,8 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .doc-lines th { background: #f1f5f9; color: #111; font-size: 9.5pt; border: 1px solid #555; text-align: center; padding: 1.5mm; }
 .doc-lines td { border: 1px solid #555; padding: .5mm 1.5mm; vertical-align: middle; }
 .doc-lines td input { border-bottom: none; }
-.doc-lines .c-date { width: 24mm; }
-.doc-lines .c-amt { width: 30mm; }
+.doc-lines .c-date { width: 30mm; }
+.doc-lines .c-amt { width: 27mm; }
 .doc-lines .c-del { width: 8mm; border: none; background: none; }
 .doc-lines td.no-print { border: none; }
 .doc-lines input.amt { text-align: right; }

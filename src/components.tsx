@@ -264,8 +264,8 @@ export function JobForm({ db, initial, isNew, title, header, defaultType, onSave
             <input type="time" value={job.dropoffTime} onChange={(e) => set('dropoffTime', e.target.value)} />
           </label>
         </div>
-        <div className="grid2">
-          <label className="field"><span>単価マスタ（選ぶと金額・距離を自動入力）</span>
+        <div className="grid3 rate-row">
+          <label className="field"><span>単価マスタ（金額を自動入力）</span>
             <select value={job.rateId ?? ''} onChange={(e) => applyRate(e.target.value)}>
               <option value="">（使わない・手入力）</option>
               {rateOptions.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
@@ -274,6 +274,9 @@ export function JobForm({ db, initial, isNew, title, header, defaultType, onSave
           </label>
           <label className="field"><span>距離(km)</span>
             <input type="number" min={0} value={job.distance ?? ''} placeholder="後から入力可" onChange={(e) => set('distance', e.target.value === '' ? undefined : +e.target.value)} />
+          </label>
+          <label className="field"><span>立替金(円・税込)</span>
+            <input type="number" min={0} value={job.advance ?? ''} placeholder="高速代など" onChange={(e) => set('advance', e.target.value === '' ? undefined : +e.target.value)} />
           </label>
         </div>
         <div className="grid3">

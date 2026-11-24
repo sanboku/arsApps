@@ -2,14 +2,25 @@ import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import * as XLSX from 'xlsx'
 import { fmtMD, monthDays, payeeOf, routeText, uid, yen } from '../store'
-import type { BillingDoc, DB, DocLine, Settings } from '../types'
+import type { BillingDoc, DB, DocLine, Job, Settings } from '../types'
 
-/** 管理表（その月の案件）から帳票を作る。請求書は請求先ごと、支払明細書は支払先ごと */
-export function buildDoc(db: DB, month: string, kind: BillingDoc['kind'], partyKey: string, number: string): BillingDoc {
-  const jobs = db.jobs
+/** 帳票の対象となる案件（請求書は請求先ごと、支払明細書は支払先ごと） */
+export function partyJobs(db: DB, month: string, kind: BillingDoc['kind'], partyKey: string) {
+  return db.jobs
     .filter((j) => j.date.startsWith(month))
     .filter((j) => (kind === 'invoice' ? `client:${j.clientId}` === partyKey : payeeOf(db, j.driverId)?.key === partyKey))
     .sort((a, b) => a.date.localeCompare(b.date) || (a.pickupTime || a.dropoffTime).localeCompare(b.pickupTime || b.dropoffTime))
+}
+/** 管理表上の合計（金額＋立替金） */
+export const partyTotal = (db: DB, month: string, kind: BillingDoc['kind'], partyKey: string) =>
+  partyJobs(db, month, kind, partyKey).reduce((s, j) => s + (kind === 'invoice' ? j.billAmount : j.payAmount) + (j.advance ?? 0), 0)
+
+/**
+ * 管理表（その月の案件）から帳票を作る。
+ * 固定業務・定期案件（同じシリーズで金額が同じもの）は「期間・回数 × 単価」の1行にまとめる。
+ */
+export function buildDoc(db: DB, month: string, kind: BillingDoc['kind'], partyKey: string, number: string): BillingDoc {
+  const jobs = partyJobs(db, month, kind, partyKey)
   let to = { name: '', honorific: '御中', zip: '', address: '' }
   if (kind === 'invoice') {
     const c = db.clients.find((x) => `client:${x.id}` === partyKey)
@@ -18,11 +29,29 @@ export function buildDoc(db: DB, month: string, kind: BillingDoc['kind'], partyK
     const p = jobs.length ? payeeOf(db, jobs[0].driverId) : null
     if (p) to = { name: p.officialName ?? p.short, honorific: p.honorific ?? '様', zip: p.zip ?? '', address: p.address ?? '' }
   }
-  const lines: DocLine[] = jobs.map((j) => {
-    const km = j.distance ? `（${j.distance}km）` : ''
-    // 会社あての支払明細は、どのドライバーの分か分かるように名前を付ける
-    const who = kind === 'payment' && partyKey.startsWith('company:') ? ` ／ ${db.drivers.find((d) => d.id === j.driverId)?.displayName ?? ''}` : ''
-    return { date: fmtMD(j.date), text: `${routeText(j)}${km}${who}`, amount: kind === 'invoice' ? j.billAmount : j.payAmount }
+  const amountOf = (j: Job) => (kind === 'invoice' ? j.billAmount : j.payAmount)
+  // 会社あての支払明細は、どのドライバーの分か分かるように名前を付ける
+  const whoOf = (j: Job) => (kind === 'payment' && partyKey.startsWith('company:') ? ` ／ ${db.drivers.find((d) => d.id === j.driverId)?.displayName ?? ''}` : '')
+
+  const groups = new Map<string, Job[]>()
+  for (const j of jobs) {
+    const key = j.seriesId ? `s:${j.seriesId}:${amountOf(j)}:${whoOf(j)}:${routeText(j)}` : `j:${j.id}`
+    groups.set(key, [...(groups.get(key) ?? []), j])
+  }
+  const lines: DocLine[] = [...groups.values()].map((g) => {
+    const j = g[0]
+    const km = g.reduce((s, x) => s + (x.distance ?? 0), 0)
+    const advance = g.reduce((s, x) => s + (x.advance ?? 0), 0)
+    if (g.length === 1) {
+      return { date: fmtMD(j.date), text: `${routeText(j)}${km ? `（${km}km）` : ''}${whoOf(j)}`, advance, amount: amountOf(j) }
+    }
+    const last = g[g.length - 1]
+    return {
+      date: `${md(j.date)}〜${md(last.date)}`,
+      text: `${routeText(j)}　${g.length}回 × @${amountOf(j).toLocaleString()}${km ? `（計${km.toLocaleString()}km）` : ''}${whoOf(j)}`,
+      advance,
+      amount: amountOf(j) * g.length,
+    }
   })
   return {
     id: uid(),
@@ -38,13 +67,18 @@ export function buildDoc(db: DB, month: string, kind: BillingDoc['kind'], partyK
     lines,
     note: kind === 'invoice' ? 'お振込期限：翌月末日\n恐れ入りますが、振込手数料は貴社にてご負担ください。' : 'お支払予定日：翌月末日',
     edited: false,
+    sourceTotal: partyTotal(db, month, kind, partyKey),
   }
 }
 
+const md = (s: string) => `${+s.slice(5, 7)}/${+s.slice(8, 10)}`
+
+/** 合計。立替金は税込の実費なので消費税の対象外として最後に足す */
 export const docTotals = (doc: BillingDoc, taxRate: number) => {
   const subtotal = doc.lines.reduce((s, l) => s + (l.amount || 0), 0)
   const tax = doc.noTax ? 0 : Math.floor((subtotal * taxRate) / 100)
-  return { subtotal, tax, total: subtotal + tax }
+  const advance = doc.lines.reduce((s, l) => s + (l.advance || 0), 0)
+  return { subtotal, tax, advance, total: subtotal + tax + advance }
 }
 
 const TITLE = { invoice: '請求書', payment: '支払明細書' }
@@ -67,7 +101,7 @@ export default function DocEditor({ doc, settings, onChange, onRegenerate, onClo
   }, [])
   const set = <K extends keyof BillingDoc>(k: K, v: BillingDoc[K]) => onChange({ ...doc, [k]: v, edited: true })
   const setLine = (i: number, patch: Partial<DocLine>) => set('lines', doc.lines.map((l, j) => (j === i ? { ...l, ...patch } : l)))
-  const { subtotal, tax, total } = docTotals(doc, settings.taxRate)
+  const { subtotal, tax, advance, total } = docTotals(doc, settings.taxRate)
   const isInvoice = doc.kind === 'invoice'
   const fileName = `${TITLE[doc.kind]}_${doc.month}_${doc.toName}`
 
@@ -77,17 +111,18 @@ export default function DocEditor({ doc, settings, onChange, onRegenerate, onClo
       [`${doc.toName} ${doc.honorific}`, '', `No. ${doc.number}`],
       [doc.toAddress, '', `発行日 ${ymdJa(doc.issueDate)}`],
       [],
-      ['日付', '内容', '金額'],
-      ...doc.lines.map((l) => [l.date, l.text, l.amount]),
+      ['日付', '内容', '立替金（税込）', '金額（税抜）'],
+      ...doc.lines.map((l) => [l.date, l.text, l.advance || '', l.amount]),
       [],
-      ['', '小計', subtotal],
-      ['', doc.noTax ? '消費税' : `消費税（${settings.taxRate}%）`, tax],
-      ['', '合計', total],
+      ['', '小計（税抜）', '', subtotal],
+      ['', doc.noTax ? '消費税' : `消費税（${settings.taxRate}%）`, '', tax],
+      ['', '立替金（税込）', '', advance],
+      ['', '合計', '', total],
       [],
       ['備考', doc.note],
     ]
     const ws = XLSX.utils.aoa_to_sheet(aoa)
-    ws['!cols'] = [{ wch: 12 }, { wch: 50 }, { wch: 14 }]
+    ws['!cols'] = [{ wch: 16 }, { wch: 50 }, { wch: 14 }, { wch: 14 }]
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, TITLE[doc.kind])
     XLSX.writeFile(wb, `${fileName}.xlsx`)
@@ -143,12 +178,16 @@ export default function DocEditor({ doc, settings, onChange, onRegenerate, onClo
         </div>
 
         <table className="doc-lines">
-          <thead><tr><th className="c-date">日付</th><th>内容</th><th className="c-amt">金額（税抜）</th><th className="no-print c-del"></th></tr></thead>
+          <thead><tr><th className="c-date">日付</th><th>内容</th><th className="c-amt">立替金（税込）</th><th className="c-amt">金額（税抜）</th><th className="no-print c-del"></th></tr></thead>
           <tbody>
             {doc.lines.map((l, i) => (
               <tr key={i}>
                 <td><input value={l.date} onChange={(e) => setLine(i, { date: e.target.value })} /></td>
                 <td><input value={l.text} onChange={(e) => setLine(i, { text: e.target.value })} /></td>
+                <td>
+                  <input className="amt no-print" type="number" value={l.advance || ''} onChange={(e) => setLine(i, { advance: +e.target.value })} />
+                  <span className="print-only amt">{l.advance ? l.advance.toLocaleString() : ''}</span>
+                </td>
                 <td>
                   <input className="amt no-print" type="number" value={l.amount} onChange={(e) => setLine(i, { amount: +e.target.value })} />
                   <span className="print-only amt">{l.amount.toLocaleString()}</span>
@@ -158,12 +197,13 @@ export default function DocEditor({ doc, settings, onChange, onRegenerate, onClo
             ))}
           </tbody>
         </table>
-        <button className="link no-print" onClick={() => set('lines', [...doc.lines, { date: '', text: '', amount: 0 }])}>＋ 行を追加（高速代・待機料・値引きなど）</button>
+        <button className="link no-print" onClick={() => set('lines', [...doc.lines, { date: '', text: '', advance: 0, amount: 0 }])}>＋ 行を追加（待機料・値引き・立替金など）</button>
 
         <table className="doc-sum">
           <tbody>
-            <tr><th>小計</th><td>{yen(subtotal)}</td></tr>
+            <tr><th>小計（税抜）</th><td>{yen(subtotal)}</td></tr>
             <tr><th>{doc.noTax ? '消費税' : `消費税（${settings.taxRate}%）`}</th><td>{yen(tax)}</td></tr>
+            <tr><th>立替金（税込・非課税）</th><td>{yen(advance)}</td></tr>
             <tr className="grand"><th>合計</th><td>{yen(total)}</td></tr>
           </tbody>
         </table>

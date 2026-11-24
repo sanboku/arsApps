@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import JapaneseHolidays from 'japanese-holidays'
-import type { DB, Driver, Job, LeaveKind, PartyInfo, Rate, RecurRule, Settings } from './types'
+import type { DB, Driver, Job, LeaveKind, PartyInfo, Rate, RecurRule, SeriesType, Settings } from './types'
 
 // ---- 日付ユーティリティ（ローカル日付を YYYY-MM-DD で扱う） ----
 export const ymd = (d: Date) =>
@@ -173,62 +173,98 @@ export const emptyJob = (p: Partial<Job> = {}): Job => ({
 })
 
 // ---- 初期サンプルデータ ----
+// 今月の1日〜来月末までの予定を、見やすい件数で用意する（社名・人名はすべて架空）
 function seed(): DB {
-  const ws = weekStart(today())
+  const m0 = monthStart(today())
+  const next = monthDays(addDays(monthDays(m0).at(-1)!, 1))
+  const until = next.at(-1)! // 来月末
+  const day = (n: number) => addDays(m0, n - 1) // 今月のn日
+  const weekdays: RecurRule = { freq: 'dow', dows: [1, 2, 3, 4, 5], holidays: false, interval: 1 }
+
   const db: DB = {
-    companies: [{ id: 'c1', name: 'ABC運送', officialName: '株式会社ABC運送', honorific: '御中', zip: '111-1111', address: '千葉県〇〇市〇〇 4-5-6' }],
+    companies: [
+      { id: 'c1', name: 'E運送', officialName: '株式会社E運送', honorific: '御中', zip: '272-0001', address: '千葉県市川市サンプル町 4-5-6' },
+      { id: 'c2', name: 'F急便', officialName: 'F急便株式会社', honorific: '御中', zip: '340-0001', address: '埼玉県草加市サンプル町 7-8-9' },
+    ],
     drivers: [
-      { id: 'd1', fullName: '山田 太郎', kana: 'やまだ たろう', phone: '090-1111-1111', displayName: '山田', kind: 'employee', showOnCalendar: true },
-      { id: 'd2', fullName: '佐藤 次郎', kana: 'さとう じろう', phone: '090-2222-2222', displayName: '佐藤', kind: 'individual', showOnCalendar: true },
-      { id: 'd3', fullName: '鈴木 三郎', kana: 'すずき さぶろう', phone: '090-3333-3333', displayName: '鈴木', kind: 'individual', showOnCalendar: true },
-      { id: 'd4', fullName: '高橋 四郎', kana: 'たかはし しろう', phone: '090-4444-4444', displayName: '高橋(ABC)', kind: 'company', companyId: 'c1', showOnCalendar: true },
-      { id: 'd5', fullName: '田中 五郎', kana: 'たなか ごろう', phone: '090-5555-5555', displayName: '田中(ABC)', kind: 'company', companyId: 'c1', showOnCalendar: true, ownRow: true },
-      { id: 'd6', fullName: '伊藤 六郎', kana: 'いとう ろくろう', phone: '090-6666-6666', displayName: '伊藤', kind: 'individual', showOnCalendar: false },
+      { id: 'd1', fullName: '山田 太郎', kana: 'やまだ たろう', phone: '090-0000-0001', displayName: '山田', kind: 'employee', showOnCalendar: true },
+      { id: 'd2', fullName: '中村 健', kana: 'なかむら けん', phone: '090-0000-0002', displayName: '中村', kind: 'employee', showOnCalendar: true },
+      { id: 'd3', fullName: '佐藤 次郎', kana: 'さとう じろう', phone: '090-0000-0003', displayName: '佐藤', kind: 'individual', showOnCalendar: true, zip: '135-0001', address: '東京都江東区サンプル 1-2-3' },
+      { id: 'd4', fullName: '鈴木 三郎', kana: 'すずき さぶろう', phone: '090-0000-0004', displayName: '鈴木', kind: 'individual', showOnCalendar: true, zip: '120-0001', address: '東京都足立区サンプル 4-5-6' },
+      { id: 'd5', fullName: '伊藤 六郎', kana: 'いとう ろくろう', phone: '090-0000-0005', displayName: '伊藤', kind: 'individual', showOnCalendar: false },
+      { id: 'd6', fullName: '高橋 四郎', kana: 'たかはし しろう', phone: '090-0000-0006', displayName: '高橋(E)', kind: 'company', companyId: 'c1', showOnCalendar: true },
+      { id: 'd7', fullName: '田中 五郎', kana: 'たなか ごろう', phone: '090-0000-0007', displayName: '田中(E)', kind: 'company', companyId: 'c1', showOnCalendar: true, ownRow: true },
+      { id: 'd8', fullName: '小林 七海', kana: 'こばやし ななみ', phone: '090-0000-0008', displayName: '小林(F)', kind: 'company', companyId: 'c2', showOnCalendar: true },
+      { id: 'd9', fullName: '加藤 八郎', kana: 'かとう はちろう', phone: '090-0000-0009', displayName: '加藤(F)', kind: 'company', companyId: 'c2', showOnCalendar: true },
     ],
     clients: [
-      { id: 'k1', name: '〇〇物流', color: '#3b82f6', officialName: '〇〇物流株式会社', honorific: '御中', zip: '135-0000', address: '東京都江東区〇〇 1-1-1' },
-      { id: 'k2', name: '△△商事', color: '#10b981', officialName: '株式会社△△商事', honorific: '御中', zip: '210-0000', address: '神奈川県川崎市〇〇 2-2-2' },
-      { id: 'k3', name: '□□ネット通販', color: '#f59e0b', officialName: '□□ネット通販株式会社', honorific: '御中', zip: '272-0000', address: '千葉県市川市〇〇 3-3-3' },
+      { id: 'k1', name: 'A物流', color: '#3b82f6', officialName: '株式会社A物流', honorific: '御中', zip: '135-0000', address: '東京都江東区サンプル 1-1-1' },
+      { id: 'k2', name: 'B商事', color: '#10b981', officialName: 'B商事株式会社', honorific: '御中', zip: '210-0000', address: '神奈川県川崎市サンプル 2-2-2' },
+      { id: 'k3', name: 'C通販', color: '#f59e0b', officialName: '株式会社C通販', honorific: '御中', zip: '272-0000', address: '千葉県市川市サンプル 3-3-3' },
+      { id: 'k4', name: 'D食品', color: '#8b5cf6', officialName: 'D食品株式会社', honorific: '御中', zip: '330-0000', address: '埼玉県さいたま市サンプル 4-4-4' },
     ],
     jobs: [],
     rates: [
-      { id: 'r1', name: '年末増便（〇〇物流）', clientId: 'k1', from: `${today().slice(0, 4)}-12-01`, to: `${today().slice(0, 4)}-12-31`, billAmount: 30000, payDefault: 21000, payByPayee: { 'company:c1': 22000 }, distance: 45, note: '12月限定の増便' },
-      { id: 'r2', name: '〇〇便業務（通常）', clientId: 'k1', from: '', to: '', billAmount: 25000, payDefault: 18000, payByPayee: {}, distance: 60, note: '' },
+      { id: 'r1', name: 'A物流 定期便', clientId: 'k1', from: '', to: '', billAmount: 25000, payDefault: 18000, payByPayee: {}, distance: 60, note: '平日毎日の固定業務' },
+      { id: 'r2', name: '年末増便（A物流）', clientId: 'k1', from: `${today().slice(0, 4)}-12-01`, to: `${today().slice(0, 4)}-12-31`, billAmount: 30000, payDefault: 21000, payByPayee: { 'company:c1': 22000 }, distance: 45, note: '12月限定。E運送は22,000円' },
+      { id: 'r3', name: 'D食品 冷凍便', clientId: 'k4', from: '', to: '', billAmount: 22000, payDefault: 17000, payByPayee: {}, distance: 50, note: '' },
     ],
     closedMonths: [],
     docs: [],
     settings: DEFAULT_SETTINGS,
-    leaves: [{ id: uid(), driverId: 'd3', date: addDays(ws, 2) }, { id: uid(), driverId: 'd1', date: addDays(ws, 5) }, { id: uid(), driverId: 'd2', date: addDays(ws, 6), kind: 'request' }],
+    leaves: [],
     memos: [
-      { id: uid(), date: addDays(ws, 1), driverId: null, time: '', text: '〇〇物流 年末増便の打診あり', color: '#fde68a' },
-      { id: uid(), date: addDays(ws, 3), driverId: 'd2', time: '13:00', text: '車両点検（午後）', color: '#bfdbfe' },
+      { id: uid(), date: today(), driverId: null, time: '', text: 'A物流より12月の増便の打診あり', color: '#fde68a' },
+      { id: uid(), date: addDays(today(), 1), driverId: 'd4', time: '13:00', text: '車両点検（午後）', color: '#bfdbfe' },
     ],
     vehicles: [
       { id: 'v1', plate: '品川 480 あ 12-34', name: 'ハイゼット', inspectionDate: addDays(today(), 20), lentTo: '佐藤', lastUsed: addDays(today(), -1), repairs: [{ date: addDays(today(), -60), description: 'タイヤ交換', cost: 32000 }] },
       { id: 'v2', plate: '品川 480 い 56-78', name: 'エブリイ', inspectionDate: addDays(today(), 200), lentTo: '', lastUsed: addDays(today(), -10), repairs: [] },
+      { id: 'v3', plate: '足立 480 う 90-12', name: 'NV200', inspectionDate: addDays(today(), 45), lentTo: '鈴木', lastUsed: today(), repairs: [{ date: addDays(today(), -120), description: 'オイル交換', cost: 6800 }] },
     ],
   }
-  // 山田さんは毎日固定（固定業務）
-  const sid = uid()
-  const fixedRule: RecurRule = { freq: 'dow', dows: [1, 2, 3, 4, 5], holidays: false, interval: 1 }
-  const fixedUntil = addDays(ws, 34)
-  for (const d of recurDates(ws, fixedUntil, fixedRule))
-    db.jobs.push(emptyJob({ date: d, driverId: 'd1', clientId: 'k1', pickups: ['〇〇便業務'], dropoffs: [], pickupTime: '08:00', seriesId: sid, seriesType: 'fixed', seriesRule: fixedRule, seriesUntil: fixedUntil, billAmount: 25000, payAmount: 0, distance: 60, rateId: 'r2', note: '固定ルート（社員のため支払なし）' }))
+
+  /** 繰り返しの案件を今月1日〜来月末まで作る */
+  const series = (type: SeriesType, rule: RecurRule, p: Partial<Job>) => {
+    const sid = uid()
+    for (const d of recurDates(m0, until, rule)) db.jobs.push(emptyJob({ ...p, date: d, seriesId: sid, seriesType: type, seriesRule: rule, seriesUntil: until }))
+  }
+  // 固定業務：社員2名が平日毎日（社員なので支払額は0）
+  series('fixed', weekdays, { driverId: 'd1', clientId: 'k1', pickups: ['A物流 定期便'], dropoffs: [], pickupTime: '08:00', billAmount: 25000, payAmount: 0, distance: 60, rateId: 'r1' })
+  series('fixed', weekdays, { driverId: 'd2', clientId: 'k2', pickups: ['B商事 午後便'], dropoffs: [], pickupTime: '13:00', billAmount: 18000, payAmount: 0, distance: 40 })
+  // 定期案件：個人委託（月水金）と、E運送の田中さん（火木・高速代あり）
+  series('regular', { ...weekdays, dows: [1, 3, 5] }, { driverId: 'd3', clientId: 'k3', pickups: ['C通販 市川DC'], dropoffs: ['千葉市内'], pickupTime: '09:00', billAmount: 16000, payAmount: 12000, distance: 35 })
+  series('regular', { ...weekdays, dows: [2, 4] }, { driverId: 'd7', clientId: 'k4', pickups: ['D食品 冷凍便'], dropoffs: [], pickupTime: '14:00', billAmount: 22000, payAmount: 17000, distance: 50, advance: 800, rateId: 'r3' })
+
+  // 単発の案件
   const gid = uid()
   db.jobs.push(
-    emptyJob({ date: addDays(ws, 1), driverId: 'd2', clientId: 'k2', pickups: ['△△商事 川崎倉庫'], dropoffs: ['横浜市内', '藤沢市'], pickupTime: '13:30', dropoffTime: '16:00', billAmount: 30000, payAmount: 22000 }),
-    emptyJob({ date: addDays(ws, 1), driverId: 'd2', clientId: 'k3', pickups: ['□□ 市川DC'], dropoffs: ['船橋'], pickupTime: '07:00', dropoffTime: '09:00', billAmount: 15000, payAmount: 11000 }),
-    emptyJob({ date: addDays(ws, 2), driverId: 'd4', clientId: 'k3', pickups: ['□□ 市川DC'], dropoffs: ['千葉市内'], pickupTime: '09:00', groupId: gid, groupIndex: 1, billAmount: 25000, payAmount: 19000 }),
-    emptyJob({ date: addDays(ws, 2), driverId: 'd5', clientId: 'k3', pickups: ['□□ 市川DC'], dropoffs: ['千葉市内'], pickupTime: '09:00', groupId: gid, groupIndex: 2, billAmount: 25000, payAmount: 19000 }),
-    emptyJob({ date: addDays(ws, 3), driverId: null, clientId: 'k2', pickups: ['△△商事 本社'], dropoffs: ['大宮'], pickupTime: '14:00', note: '担当未定・要調整', billAmount: 20000, payAmount: 15000 }),
-    emptyJob({ date: addDays(ws, 4), driverId: 'd3', clientId: 'k1', pickups: ['〇〇物流 東雲センター'], dropoffs: ['羽田'], pickupTime: '15:00', billAmount: 18000, payAmount: 13000 }),
+    emptyJob({ date: day(6), driverId: 'd4', clientId: 'k1', pickups: ['A物流 東雲センター'], dropoffs: ['羽田'], pickupTime: '10:00', billAmount: 18000, payAmount: 13000, distance: 25, advance: 1200, note: '首都高利用' }),
+    emptyJob({ date: day(12), driverId: 'd8', clientId: 'k3', pickups: ['C通販 市川DC'], dropoffs: ['船橋'], pickupTime: '07:00', groupId: gid, groupIndex: 1, billAmount: 15000, payAmount: 11000, distance: 20 }),
+    emptyJob({ date: day(12), driverId: 'd9', clientId: 'k3', pickups: ['C通販 市川DC'], dropoffs: ['船橋'], pickupTime: '07:00', groupId: gid, groupIndex: 2, billAmount: 15000, payAmount: 11000, distance: 20 }),
+    emptyJob({ date: day(18), driverId: 'd4', clientId: 'k2', pickups: ['B商事 川崎倉庫'], dropoffs: ['横浜市内', '藤沢市'], pickupTime: '13:30', billAmount: 30000, payAmount: 22000, distance: 70, advance: 1500 }),
+    emptyJob({ date: addDays(today(), 2), driverId: null, clientId: 'k2', pickups: ['B商事 本社'], dropoffs: ['大宮'], pickupTime: '14:00', billAmount: 20000, payAmount: 15000, note: '担当未定・要調整' }),
+    emptyJob({ date: addDays(today(), 3), driverId: 'd6', clientId: 'k1', pickups: ['A物流 スポット便'], dropoffs: [], pickupTime: '09:00', billAmount: 20000, payAmount: 15000, distance: 30 }),
+  )
+
+  // 休暇：案件のない日に入れる
+  const free = (driverId: string, from: string) => {
+    for (let d = from; d <= until; d = addDays(d, 1)) if (!db.jobs.some((j) => j.driverId === driverId && j.date === d)) return d
+    return from
+  }
+  db.leaves.push(
+    { id: uid(), driverId: 'd1', date: free('d1', addDays(weekStart(today()), 5)) },
+    { id: uid(), driverId: 'd3', date: free('d3', addDays(today(), 1)), kind: 'request' },
+    { id: uid(), driverId: 'd4', date: free('d4', addDays(today(), 2)) },
   )
   return db
 }
 
-const KEY = 'arsapps-db-v2' // データ構造を変えたらバージョンを上げる（サンプル版は初期データに戻る）
+const KEY = 'arsapps-db-v3' // データ構造を変えたらバージョンを上げる（サンプル版は初期データに戻る）
 const load = (): DB => {
   try {
+    // 古い形式のデータは使わないので消しておく
+    for (const old of ['arsapps-db-v1', 'arsapps-db-v2']) localStorage.removeItem(old)
     const raw = localStorage.getItem(KEY)
     if (raw) return { memos: [], rates: [], closedMonths: [], docs: [], settings: DEFAULT_SETTINGS, ...JSON.parse(raw) } // 後から追加した項目は既定値で補う
   } catch {
