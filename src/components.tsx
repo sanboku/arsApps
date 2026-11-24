@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import type { DB, Job, Memo, RecurRule, SeriesType } from './types'
-import { CARD_COLORS, WEEKDAYS, WEEKDAYS_MON_FIRST, emptyJob, recurDates, textColorFor, today, uid } from './store'
+import { CARD_COLORS, WEEKDAYS, WEEKDAYS_MON_FIRST, emptyJob, isClosed, ratePay, ratesFor, recurDates, textColorFor, today, uid } from './store'
 
 export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   return (
@@ -68,7 +68,7 @@ export function ColorPicker({ value, fallback, onChange }: { value?: string; fal
 }
 
 type Scope = 'one' | 'future'
-const SHARED_KEYS = ['clientId', 'pickups', 'dropoffs', 'pickupTime', 'dropoffTime', 'note', 'color'] as const
+const SHARED_KEYS = ['clientId', 'pickups', 'dropoffs', 'pickupTime', 'dropoffTime', 'note', 'color', 'distance'] as const
 const pickShared = (j: Job) => Object.fromEntries(SHARED_KEYS.map((k) => [k, j[k]])) as Pick<Job, (typeof SHARED_KEYS)[number]>
 const SERIES_LABEL: Record<SeriesType, string> = { fixed: '固定業務', regular: '定期案件' }
 const DEFAULT_RULE: RecurRule = { freq: 'dow', dows: [1, 2, 3, 4, 5], holidays: false, interval: 1 }
@@ -101,6 +101,17 @@ export function JobForm({ db, initial, isNew, title, header, defaultType, onSave
   const set = <K extends keyof Job>(k: K, v: Job[K]) => setJob((j) => ({ ...j, [k]: v }))
   const original = db.jobs.find((j) => j.id === job.id)
   const inSeries = !isNew && !!job.seriesId
+  // 締め済みの月の案件は変更できない（締め解除は請求・支払管理から）
+  const locked = !isNew && !!original && isClosed(db, original.date)
+  const rate = db.rates.find((r) => r.id === job.rateId)
+  const rateOptions = ratesFor(db, job.date, job.clientId)
+  const applyRate = (id: string) => {
+    const r = db.rates.find((x) => x.id === id)
+    if (!r) return set('rateId', undefined)
+    setJob((j) => ({ ...j, rateId: r.id, clientId: r.clientId ?? j.clientId, billAmount: r.billAmount, payAmount: ratePay(db, r, j.driverId), distance: r.distance ?? j.distance }))
+  }
+  /** 単価適用中に担当者を変えたら、支払先に応じた支払額に更新 */
+  const setDriver = (driverId: string | null) => setJob((j) => ({ ...j, driverId, payAmount: rate ? ratePay(db, rate, driverId) : j.payAmount }))
 
   // 繰り返し設定の変更（編集時）。種類だけの変更はラベルの付け替え、それ以外はこの日より後を作り直す
   const ruleChanged = !isNew && (
@@ -127,6 +138,7 @@ export function JobForm({ db, initial, isNew, title, header, defaultType, onSave
   const save = () => {
     const clean = { ...job, pickups: job.pickups.filter(Boolean), dropoffs: job.dropoffs.filter(Boolean) }
     if (!clean.pickups.length) return alert('積み地（または業務名）を入力してください')
+    if (locked || isClosed(db, clean.date)) return alert('締め済みの月の案件は登録・変更できません。請求・支払管理で締めを解除してください。')
     if (!validateRule()) return
     if (clean.driverId && db.leaves.some((l) => l.driverId === clean.driverId && l.date === clean.date)) {
       const name = db.drivers.find((d) => d.id === clean.driverId)?.displayName
@@ -171,8 +183,16 @@ export function JobForm({ db, initial, isNew, title, header, defaultType, onSave
             if (j.id === self.id) return self
             let n = j
             if (matchesScope(j)) n = { ...n, ...fields }
-            else if (j.groupId && groups.has(j.groupId)) n = { ...n, ...shared } // 同じ案件の他車両には共通項目のみ反映
-            if (j.id in sibDrivers) n = { ...n, driverId: sibDrivers[j.id] }
+            else if (j.groupId && groups.has(j.groupId)) {
+              n = { ...n, ...shared } // 同じ案件の他車両には共通項目のみ反映
+              // 単価マスタを新しく選んだら、他の車両にも適用（支払額は各車両の支払先に応じて）
+              if (rate && self.rateId !== original?.rateId) n = { ...n, rateId: rate.id, billAmount: self.billAmount, payAmount: ratePay(db, rate, n.driverId) }
+            }
+            if (j.id in sibDrivers) {
+              n = { ...n, driverId: sibDrivers[j.id] }
+              const r = db.rates.find((x) => x.id === n.rateId)
+              if (r) n = { ...n, payAmount: ratePay(db, r, n.driverId) }
+            }
             return n
           }),
           ...add,
@@ -202,6 +222,7 @@ export function JobForm({ db, initial, isNew, title, header, defaultType, onSave
   }
 
   const remove = (wholeGroup: boolean) => {
+    if (locked) return alert('締め済みの月の案件は削除できません。請求・支払管理で締めを解除してください。')
     const msg = wholeGroup ? `この案件の全${siblings.length + 1}台を削除しますか？` : scope === 'future' ? 'この日以降の同じ繰り返しカードをすべて削除しますか？' : 'この案件を削除しますか？'
     if (!confirm(msg)) return
     onDelete?.((db) => ({ ...db, jobs: db.jobs.filter((j) => !(matchesScope(j) || (wholeGroup && j.groupId === job.groupId))) }))
@@ -221,11 +242,12 @@ export function JobForm({ db, initial, isNew, title, header, defaultType, onSave
             <input type="date" value={job.date} onChange={(e) => set('date', e.target.value)} />
           </label>
           <label className="field"><span>担当者{isNew ? (vehicles > 1 ? '（1台目）' : '') : siblings.length > 0 || extra.length > 0 ? `（${job.groupIndex ?? 1}台目）` : ''}</span>
-            <select value={job.driverId ?? ''} onChange={(e) => set('driverId', e.target.value || null)}>
+            <select value={job.driverId ?? ''} onChange={(e) => setDriver(e.target.value || null)}>
               <DriverOptions db={db} />
             </select>
           </label>
         </div>
+        {locked && <p className="small warn-text">この案件は締め済みの月のため変更できません（締め解除は「請求・支払管理」から）。</p>}
         <label className="field"><span>請求先</span>
           <select value={job.clientId ?? ''} onChange={(e) => set('clientId', e.target.value || null)}>
             <option value="">（未設定）</option>
@@ -240,6 +262,18 @@ export function JobForm({ db, initial, isNew, title, header, defaultType, onSave
           </label>
           <label className="field"><span>降ろし時間</span>
             <input type="time" value={job.dropoffTime} onChange={(e) => set('dropoffTime', e.target.value)} />
+          </label>
+        </div>
+        <div className="grid2">
+          <label className="field"><span>単価マスタ（選ぶと金額・距離を自動入力）</span>
+            <select value={job.rateId ?? ''} onChange={(e) => applyRate(e.target.value)}>
+              <option value="">（使わない・手入力）</option>
+              {rateOptions.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+              {rate && !rateOptions.includes(rate) && <option value={rate.id}>{rate.name}（期間外）</option>}
+            </select>
+          </label>
+          <label className="field"><span>距離(km)</span>
+            <input type="number" min={0} value={job.distance ?? ''} placeholder="後から入力可" onChange={(e) => set('distance', e.target.value === '' ? undefined : +e.target.value)} />
           </label>
         </div>
         <div className="grid3">
@@ -356,13 +390,13 @@ export function JobForm({ db, initial, isNew, title, header, defaultType, onSave
         <div className="actions">
           {!isNew && onDelete && (
             <>
-              <button className="danger-btn" onClick={() => remove(false)}>{siblings.length ? 'この車両を削除' : '削除'}</button>
-              {siblings.length > 0 && scope === 'one' && <button className="danger-btn" onClick={() => remove(true)}>全台削除</button>}
+              <button className="danger-btn" disabled={locked} onClick={() => remove(false)}>{siblings.length ? 'この車両を削除' : '削除'}</button>
+              {siblings.length > 0 && scope === 'one' && <button className="danger-btn" disabled={locked} onClick={() => remove(true)}>全台削除</button>}
             </>
           )}
           <span className="spacer" />
           <button className="ghost" onClick={onClose}>キャンセル</button>
-          <button onClick={save}>保存</button>
+          <button onClick={save} disabled={locked}>保存</button>
         </div>
       </div>
     </Modal>

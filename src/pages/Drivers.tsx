@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { Store } from '../store'
 import { orderedRowKeys, today, uid } from '../store'
-import type { Driver, DriverKind } from '../types'
+import type { Company, Driver, DriverKind } from '../types'
 import { JobForm, Modal } from '../components'
 
 const KIND_LABEL: Record<DriverKind, string> = { individual: '個人委託', company: '所属会社', employee: '自社正社員' }
@@ -80,6 +80,12 @@ function DriverForm({ store, initial, onClose }: { store: Store; initial: Driver
           )}
         </div>
         <label className="inline"><input type="checkbox" checked={d.showOnCalendar} onChange={(e) => set('showOnCalendar', e.target.checked)} />予定表に常に表示する（オフでも案件がある週は表示）</label>
+        {d.kind === 'individual' && (
+          <div className="grid2">
+            <label className="field"><span>郵便番号（支払明細書の宛先）</span><input value={d.zip ?? ''} onChange={(e) => set('zip', e.target.value)} /></label>
+            <label className="field"><span>住所（支払明細書の宛先）</span><input value={d.address ?? ''} onChange={(e) => set('address', e.target.value)} /></label>
+          </div>
+        )}
         {d.kind === 'company' && (
           <label className="inline"><input type="checkbox" checked={!!d.ownRow} onChange={(e) => set('ownRow', e.target.checked)} />会社の行とは別に、独立した行で表示する</label>
         )}
@@ -109,16 +115,34 @@ function DriverForm({ store, initial, onClose }: { store: Store; initial: Driver
 function CompanyEditor({ store }: { store: Store }) {
   const { db, update } = store
   const [name, setName] = useState('')
+  const setCompany = (id: string, patch: Partial<Company>) => update((db) => ({ ...db, companies: db.companies.map((x) => (x.id === id ? { ...x, ...patch } : x)) }))
   return (
     <section className="card">
       <h3>委託会社</h3>
-      <ul className="list">
-        {db.companies.map((c) => (
-          <li key={c.id}>{c.name} <span className="muted small">（{db.drivers.filter((d) => d.companyId === c.id).length}名）</span></li>
-        ))}
-      </ul>
+      <p className="muted small">画面には「略称」を表示し、支払明細書には「正式名称・敬称・住所」を印字します。</p>
+      <div className="scroll-x">
+        <table className="client-table">
+          <thead><tr><th>略称（画面表示）</th><th>正式名称（支払明細書）</th><th>敬称</th><th>郵便番号</th><th>住所</th><th>人数</th></tr></thead>
+          <tbody>
+            {db.companies.map((c) => (
+              <tr key={c.id}>
+                <td><input value={c.name} onChange={(e) => setCompany(c.id, { name: e.target.value })} /></td>
+                <td><input value={c.officialName ?? ''} placeholder={c.name} onChange={(e) => setCompany(c.id, { officialName: e.target.value })} /></td>
+                <td>
+                  <select value={c.honorific ?? '御中'} onChange={(e) => setCompany(c.id, { honorific: e.target.value })}>
+                    <option>御中</option><option>様</option>
+                  </select>
+                </td>
+                <td><input className="zip" value={c.zip ?? ''} onChange={(e) => setCompany(c.id, { zip: e.target.value })} /></td>
+                <td><input value={c.address ?? ''} onChange={(e) => setCompany(c.id, { address: e.target.value })} /></td>
+                <td>{db.drivers.filter((d) => d.companyId === c.id).length}名</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <div className="row">
-        <input placeholder="会社名" value={name} onChange={(e) => setName(e.target.value)} />
+        <input placeholder="会社名（略称）" value={name} onChange={(e) => setName(e.target.value)} />
         <button onClick={() => { if (!name) return; update((db) => ({ ...db, companies: [...db.companies, { id: uid(), name }] })); setName('') }}>追加</button>
       </div>
     </section>

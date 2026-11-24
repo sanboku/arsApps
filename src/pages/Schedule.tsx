@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Store } from '../store'
-import { LEAVE_LABEL, addDays, byTime, fmtMD, hasOwnRow, holidayName, isPM, leaveCount, monthDays, orderedRowKeys, parseYmd, routeText, textColorFor, today, uid, weekStart, ymd } from '../store'
+import { LEAVE_LABEL, addDays, byTime, fmtMD, hasOwnRow, holidayName, isClosed, isPM, ratePay, leaveCount, monthDays, orderedRowKeys, parseYmd, routeText, textColorFor, today, uid, weekStart, ymd } from '../store'
 import type { DB, Job, Leave, LeaveKind, Memo } from '../types'
 import { JobForm, MemoForm, Modal } from '../components'
 
@@ -140,8 +140,11 @@ export default function Schedule({ store }: { store: Store }) {
       const jobId = id
       const src = db.jobs.find((j) => j.id === jobId)
       if (!src) return db
-      if (copy) return { ...db, jobs: [...db.jobs, { ...src, id: uid(), date, driverId, seriesId: undefined, seriesType: undefined, seriesRule: undefined, seriesUntil: undefined, groupId: undefined, groupIndex: undefined }] }
-      return { ...db, jobs: db.jobs.map((j) => (j.id === jobId ? { ...j, date, driverId } : j)) }
+      // 単価マスタ適用中なら、新しい担当（支払先）に応じた支払額にする
+      const r = db.rates.find((x) => x.id === src.rateId)
+      const payAmount = r ? ratePay(db, r, driverId) : src.payAmount
+      if (copy) return { ...db, jobs: [...db.jobs, { ...src, id: uid(), date, driverId, payAmount, seriesId: undefined, seriesType: undefined, seriesRule: undefined, seriesUntil: undefined, groupId: undefined, groupIndex: undefined }] }
+      return { ...db, jobs: db.jobs.map((j) => (j.id === jobId ? { ...j, date, driverId, payAmount } : j)) }
     })
 
   /** 休暇を置けるか。置けない理由を返す（案件がある日・すでに休暇がある日は不可） */
@@ -154,6 +157,10 @@ export default function Schedule({ store }: { store: Store }) {
   /** 担当が決まった後の配置。休暇は置けるか確認し、案件は休暇日なら確認を出す */
   const place = (key: string, date: string, driverId: string | null, copy: boolean) => {
     const [kind, id] = key.split(':')
+    if (kind === 'job') {
+      const src = db.jobs.find((j) => j.id === id)
+      if (src && ((!copy && isClosed(db, src.date)) || isClosed(db, date))) return alert('締め済みの月の案件は移動・コピーできません。請求・支払管理で締めを解除してください。')
+    }
     if (kind === 'leave') {
       if (!driverId) return alert('担当者未定の行には休暇を置けません。')
       const msg = leaveBlock(driverId, date, id, copy)

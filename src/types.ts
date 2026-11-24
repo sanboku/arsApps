@@ -3,9 +3,17 @@ export type ID = string
 /** 委託区分: 個人 / 所属会社 / 自社正社員 */
 export type DriverKind = 'individual' | 'company' | 'employee'
 
-export interface Company {
+/** 帳票の宛先情報（正式名称など）。画面の表示は略称（name）を使う */
+export interface PartyInfo {
+  officialName?: string
+  honorific?: string // 御中 / 様
+  zip?: string
+  address?: string
+}
+
+export interface Company extends PartyInfo {
   id: ID
-  name: string
+  name: string // 略称
 }
 
 export interface Driver {
@@ -17,13 +25,16 @@ export interface Driver {
   kind: DriverKind
   companyId?: ID // kind === 'company' のとき
   showOnCalendar: boolean
+  /** 支払明細の宛先住所（個人委託） */
+  zip?: string
+  address?: string
   /** 所属会社のドライバーを、会社の行とは別に独立した行で表示する */
   ownRow?: boolean
 }
 
-export interface Client {
+export interface Client extends PartyInfo {
   id: ID
-  name: string
+  name: string // 略称
   color: string
 }
 
@@ -62,6 +73,62 @@ export interface Job {
   /** 請求額 / 支払額（税抜, 円） */
   billAmount: number
   payAmount: number
+  /** 距離（km）。後から手入力、または単価マスタの標準距離 */
+  distance?: number
+  /** 適用した単価（単価マスタ） */
+  rateId?: ID
+}
+
+/**
+ * 単価マスタ（シーズン案件などの請求額・支払先ごとの支払額）。
+ * 支払先のキーは "company:会社ID" / "driver:ドライバーID"。
+ */
+export interface Rate {
+  id: ID
+  name: string
+  clientId: ID | null
+  from: string // 適用期間（空=制限なし）
+  to: string
+  billAmount: number
+  payDefault: number
+  payByPayee: Record<string, number>
+  distance?: number
+  note: string
+}
+
+/** 帳票（請求書 / 支払明細書）。締め後に管理表から作成し、自由に編集できる */
+export interface DocLine {
+  date: string
+  text: string
+  amount: number
+}
+export interface BillingDoc {
+  id: ID
+  month: string // YYYY-MM
+  kind: 'invoice' | 'payment'
+  partyKey: string // "client:ID" / "company:ID" / "driver:ID"
+  toName: string
+  honorific: string
+  toZip: string
+  toAddress: string
+  number: string
+  issueDate: string
+  lines: DocLine[]
+  note: string
+  edited: boolean
+  /** 消費税を計算しない（免税の個人ドライバーへの支払など） */
+  noTax?: boolean
+}
+
+/** 自社情報（帳票の発行元） */
+export interface Settings {
+  companyName: string
+  zip: string
+  address: string
+  tel: string
+  invoiceNo: string // 適格請求書発行事業者 登録番号
+  bank: string // 振込先
+  taxRate: number // %
 }
 
 /** 案件ではないメモ用カード */
@@ -108,6 +175,11 @@ export interface DB {
   leaves: Leave[]
   memos: Memo[]
   vehicles: Vehicle[]
+  rates: Rate[]
+  /** 締めた月（YYYY-MM） */
+  closedMonths: string[]
+  docs: BillingDoc[]
+  settings: Settings
   /** 予定表の行の並び順（"d:ドライバーID" / "c:会社ID"）。会社内の並びは drivers の配列順 */
   rowOrder?: string[]
 }

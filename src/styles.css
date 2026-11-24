@@ -187,7 +187,7 @@ tr.clickable:hover { background: #f1f5f9; }
 .actions { display: flex; gap: 8px; align-items: center; }
 
 /* billing */
-.tabs { display: flex; gap: 4px; margin-bottom: -1px; }
+.tabs { display: flex; gap: 4px; margin-bottom: -1px; flex-wrap: wrap; }
 .tabs button { background: #e2e8f0; color: var(--text); border: 1px solid var(--line); border-radius: 8px 8px 0 0; }
 .tabs button.active { background: #fff; border-bottom-color: #fff; }
 
@@ -219,8 +219,81 @@ tr.clickable:hover { background: #f1f5f9; }
   .sched { min-width: 760px; }
 }
 
+/* billing */
+.billing .card { border-top-left-radius: 0; }
+.badge-closed { background: #fef3c7; color: #92400e; border: 1px solid #f59e0b; border-radius: 6px; padding: 4px 10px; font-weight: 700; font-size: 13px; }
+.ledger-tools { margin-bottom: 6px; }
+.ledger td { vertical-align: middle; padding: 3px 6px; }
+.ledger th { white-space: nowrap; }
+.ledger input.num { width: 96px; padding: 3px 6px; }
+.ledger input.num.short { width: 64px; }
+.ledger tfoot th { background: #f8fafc; color: var(--text); font-size: 13px; }
+.ledger .link { text-align: left; color: var(--text); }
+.ledger .link:hover { color: var(--primary); text-decoration: underline; }
+tr.warn-row td { background: #fffbeb; }
+input:disabled, select:disabled { background: #f3f4f6; color: #374151; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+.client-table input { min-width: 120px; width: 100%; }
+.client-table input.zip { min-width: 90px; width: 90px; }
+.client-table input[type='color'] { min-width: 0; width: 36px; }
+
+/* 帳票（A4） */
+.doc-overlay { position: fixed; inset: 0; z-index: 60; background: #64748b; overflow: auto; padding: 0 16px 40px; }
+.doc-toolbar { position: sticky; top: 0; z-index: 2; display: flex; gap: 8px; align-items: center; background: #1e293b; color: #fff; margin: 0 -16px; padding: 8px 16px; flex-wrap: wrap; }
+.doc-toolbar .ghost { color: #fff; border-color: #475569; }
+.doc-hint { color: #e2e8f0; font-size: 12px; text-align: center; margin: 8px 0; }
+.doc-sheet {
+  background: #fff; width: 210mm; min-height: 297mm; margin: 0 auto; padding: 14mm 16mm; box-shadow: 0 4px 20px #0005;
+  font-size: 10.5pt; color: #111; font-family: 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', serif;
+}
+.doc-sheet input, .doc-sheet textarea { font: inherit; color: inherit; border: none; border-bottom: 1px dashed #cbd5e1; border-radius: 0; padding: 1px 2px; background: transparent; width: 100%; }
+.doc-sheet input:focus, .doc-sheet textarea:focus { outline: 2px solid #93c5fd; background: #eff6ff; }
+.doc-title { text-align: center; font-size: 20pt; letter-spacing: .5em; margin: 0 0 6mm; border-bottom: 3px double #111; padding-bottom: 2mm; }
+.doc-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 1mm; font-size: 9.5pt; }
+.doc-meta input { width: 40mm; text-align: right; }
+.doc-parties { display: flex; justify-content: space-between; gap: 10mm; margin: 4mm 0 6mm; }
+.doc-to { flex: 1; }
+.doc-zip { display: flex; align-items: center; width: 40mm; }
+.doc-addr { font-size: 9.5pt; }
+.doc-toname { display: flex; align-items: baseline; border-bottom: 1px solid #111; margin: 3mm 0; font-size: 14pt; }
+.doc-toname input { border-bottom: none; }
+.doc-toname .doc-hon { width: 16mm; flex-shrink: 0; }
+.doc-total-box { display: flex; justify-content: space-between; align-items: baseline; border: 2px solid #111; padding: 2mm 4mm; margin-top: 3mm; max-width: 95mm; }
+.doc-total-box b { font-size: 16pt; }
+.doc-from { width: 65mm; font-size: 9pt; line-height: 1.6; padding-top: 8mm; }
+.doc-from b { font-size: 11pt; }
+.doc-lines { width: 100%; border-collapse: collapse; margin-top: 2mm; }
+.doc-lines th { background: #f1f5f9; color: #111; font-size: 9.5pt; border: 1px solid #555; text-align: center; padding: 1.5mm; }
+.doc-lines td { border: 1px solid #555; padding: .5mm 1.5mm; vertical-align: middle; }
+.doc-lines td input { border-bottom: none; }
+.doc-lines .c-date { width: 24mm; }
+.doc-lines .c-amt { width: 30mm; }
+.doc-lines .c-del { width: 8mm; border: none; background: none; }
+.doc-lines td.no-print { border: none; }
+.doc-lines input.amt { text-align: right; }
+.doc-lines span.amt { text-align: right; padding: 1px 2px; }
+.print-only { display: none; }
+.doc-sum { margin: 4mm 0 0 auto; border-collapse: collapse; min-width: 75mm; }
+.doc-sum th, .doc-sum td { border: 1px solid #555; padding: 1.5mm 3mm; color: #111; font-size: 10pt; }
+.doc-sum th { background: #f1f5f9; text-align: left; font-weight: 400; }
+.doc-sum td { text-align: right; }
+.doc-sum .grand th, .doc-sum .grand td { font-weight: 700; font-size: 11pt; }
+.doc-bank { margin-top: 6mm; font-size: 9.5pt; border: 1px solid #555; padding: 2mm 3mm; }
+.doc-note { margin-top: 4mm; font-size: 9.5pt; }
+.doc-note textarea { border: 1px solid #ccc; resize: vertical; margin-top: 1mm; }
+
 @media print {
   .topbar, .toolbar button, .no-print { display: none !important; }
   body, :root { background: #fff; }
   .card { border: none; }
+  /* 帳票を開いているときは帳票だけを印刷 */
+  @page { size: A4; margin: 0; }
+  body.doc-open #root { display: none; }
+  body.doc-open .doc-overlay { position: static; background: none; padding: 0; overflow: visible; }
+  body.doc-open .doc-toolbar, body.doc-open .doc-hint { display: none; }
+  body.doc-open .doc-sheet { box-shadow: none; margin: 0; width: auto; min-height: 0; }
+  .doc-sheet input, .doc-sheet textarea { border-bottom: none !important; outline: none !important; background: none !important; }
+  .print-only { display: inline; }
+  span.print-only.amt { display: block; }
+  .doc-note textarea { border: none; resize: none; }
 }

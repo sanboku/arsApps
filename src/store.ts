@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import JapaneseHolidays from 'japanese-holidays'
-import type { DB, Driver, Job, LeaveKind, RecurRule } from './types'
+import type { DB, Driver, Job, LeaveKind, PartyInfo, Rate, RecurRule, Settings } from './types'
 
 // ---- 日付ユーティリティ（ローカル日付を YYYY-MM-DD で扱う） ----
 export const ymd = (d: Date) =>
@@ -94,6 +94,49 @@ export const LEAVE_LABEL: Record<LeaveKind, { short: string; long: string }> = {
   request: { short: '希', long: '希望休' },
 }
 
+// ---- 請求・支払 ----
+
+/** 支払先。所属会社のドライバーは会社、個人委託はその人、自社正社員は支払対象外 */
+export type Payee = { key: string; short: string; kind: 'company' | 'driver' | 'self' } & PartyInfo
+export function payeeOf(db: DB, driverId: string | null): Payee | null {
+  const d = db.drivers.find((x) => x.id === driverId)
+  if (!d) return null
+  if (d.kind === 'employee') return { key: 'self', short: '自社', kind: 'self' }
+  if (d.kind === 'company') {
+    const c = db.companies.find((x) => x.id === d.companyId)
+    if (c) return { key: `company:${c.id}`, short: c.name, kind: 'company', officialName: c.officialName || c.name, honorific: c.honorific || '御中', zip: c.zip, address: c.address }
+  }
+  return { key: `driver:${d.id}`, short: d.displayName, kind: 'driver', officialName: d.fullName, honorific: '様', zip: d.zip, address: d.address }
+}
+
+/** 締め済みの月か */
+export const isClosed = (db: DB, date: string) => db.closedMonths.includes(date.slice(0, 7))
+
+/** 利益率（%）。請求額が0なら null */
+export const profitRate = (bill: number, pay: number) => (bill ? Math.round(((bill - pay) / bill) * 1000) / 10 : null)
+
+/** 単価マスタのうち、その日・その請求先で使えるもの */
+export const ratesFor = (db: DB, date: string, clientId: string | null) =>
+  db.rates.filter((r) => (!r.clientId || !clientId || r.clientId === clientId) && (!r.from || date >= r.from) && (!r.to || date <= r.to))
+
+/** 単価マスタから、支払先に応じた支払額 */
+export const payFromRate = (r: Rate, payeeKey: string | undefined) => (payeeKey && payeeKey in r.payByPayee ? r.payByPayee[payeeKey] : r.payDefault)
+/** 単価マスタから、担当者に応じた支払額（自社正社員は0） */
+export const ratePay = (db: DB, r: Rate, driverId: string | null) => {
+  const p = payeeOf(db, driverId)
+  return p?.kind === 'self' ? 0 : payFromRate(r, p?.key)
+}
+
+export const DEFAULT_SETTINGS: Settings = {
+  companyName: '株式会社サンプル運送',
+  zip: '000-0000',
+  address: '東京都〇〇区〇〇 1-2-3',
+  tel: '03-0000-0000',
+  invoiceNo: 'T0000000000000',
+  bank: '〇〇銀行 〇〇支店 普通 1234567 カ）サンプルウンソウ',
+  taxRate: 10,
+}
+
 export const WEEKDAYS_MON_FIRST = [1, 2, 3, 4, 5, 6, 0]
 
 /** 定期案件の発生日を列挙 */
@@ -133,7 +176,7 @@ export const emptyJob = (p: Partial<Job> = {}): Job => ({
 function seed(): DB {
   const ws = weekStart(today())
   const db: DB = {
-    companies: [{ id: 'c1', name: '株式会社ABC運送' }],
+    companies: [{ id: 'c1', name: 'ABC運送', officialName: '株式会社ABC運送', honorific: '御中', zip: '111-1111', address: '千葉県〇〇市〇〇 4-5-6' }],
     drivers: [
       { id: 'd1', fullName: '山田 太郎', kana: 'やまだ たろう', phone: '090-1111-1111', displayName: '山田', kind: 'employee', showOnCalendar: true },
       { id: 'd2', fullName: '佐藤 次郎', kana: 'さとう じろう', phone: '090-2222-2222', displayName: '佐藤', kind: 'individual', showOnCalendar: true },
@@ -143,11 +186,18 @@ function seed(): DB {
       { id: 'd6', fullName: '伊藤 六郎', kana: 'いとう ろくろう', phone: '090-6666-6666', displayName: '伊藤', kind: 'individual', showOnCalendar: false },
     ],
     clients: [
-      { id: 'k1', name: '〇〇物流', color: '#3b82f6' },
-      { id: 'k2', name: '△△商事', color: '#10b981' },
-      { id: 'k3', name: '□□ネット通販', color: '#f59e0b' },
+      { id: 'k1', name: '〇〇物流', color: '#3b82f6', officialName: '〇〇物流株式会社', honorific: '御中', zip: '135-0000', address: '東京都江東区〇〇 1-1-1' },
+      { id: 'k2', name: '△△商事', color: '#10b981', officialName: '株式会社△△商事', honorific: '御中', zip: '210-0000', address: '神奈川県川崎市〇〇 2-2-2' },
+      { id: 'k3', name: '□□ネット通販', color: '#f59e0b', officialName: '□□ネット通販株式会社', honorific: '御中', zip: '272-0000', address: '千葉県市川市〇〇 3-3-3' },
     ],
     jobs: [],
+    rates: [
+      { id: 'r1', name: '年末増便（〇〇物流）', clientId: 'k1', from: `${today().slice(0, 4)}-12-01`, to: `${today().slice(0, 4)}-12-31`, billAmount: 30000, payDefault: 21000, payByPayee: { 'company:c1': 22000 }, distance: 45, note: '12月限定の増便' },
+      { id: 'r2', name: '〇〇便業務（通常）', clientId: 'k1', from: '', to: '', billAmount: 25000, payDefault: 18000, payByPayee: {}, distance: 60, note: '' },
+    ],
+    closedMonths: [],
+    docs: [],
+    settings: DEFAULT_SETTINGS,
     leaves: [{ id: uid(), driverId: 'd3', date: addDays(ws, 2) }, { id: uid(), driverId: 'd1', date: addDays(ws, 5) }, { id: uid(), driverId: 'd2', date: addDays(ws, 6), kind: 'request' }],
     memos: [
       { id: uid(), date: addDays(ws, 1), driverId: null, time: '', text: '〇〇物流 年末増便の打診あり', color: '#fde68a' },
@@ -163,7 +213,7 @@ function seed(): DB {
   const fixedRule: RecurRule = { freq: 'dow', dows: [1, 2, 3, 4, 5], holidays: false, interval: 1 }
   const fixedUntil = addDays(ws, 34)
   for (const d of recurDates(ws, fixedUntil, fixedRule))
-    db.jobs.push(emptyJob({ date: d, driverId: 'd1', clientId: 'k1', pickups: ['〇〇便業務'], dropoffs: [], pickupTime: '08:00', seriesId: sid, seriesType: 'fixed', seriesRule: fixedRule, seriesUntil: fixedUntil, billAmount: 25000, payAmount: 18000, note: '固定ルート' }))
+    db.jobs.push(emptyJob({ date: d, driverId: 'd1', clientId: 'k1', pickups: ['〇〇便業務'], dropoffs: [], pickupTime: '08:00', seriesId: sid, seriesType: 'fixed', seriesRule: fixedRule, seriesUntil: fixedUntil, billAmount: 25000, payAmount: 0, distance: 60, rateId: 'r2', note: '固定ルート（社員のため支払なし）' }))
   const gid = uid()
   db.jobs.push(
     emptyJob({ date: addDays(ws, 1), driverId: 'd2', clientId: 'k2', pickups: ['△△商事 川崎倉庫'], dropoffs: ['横浜市内', '藤沢市'], pickupTime: '13:30', dropoffTime: '16:00', billAmount: 30000, payAmount: 22000 }),
@@ -180,7 +230,7 @@ const KEY = 'arsapps-db-v2' // データ構造を変えたらバージョンを�
 const load = (): DB => {
   try {
     const raw = localStorage.getItem(KEY)
-    if (raw) return { memos: [], ...JSON.parse(raw) } // 後から追加した項目は空で補う
+    if (raw) return { memos: [], rates: [], closedMonths: [], docs: [], settings: DEFAULT_SETTINGS, ...JSON.parse(raw) } // 後から追加した項目は既定値で補う
   } catch {
     /* noop */
   }
