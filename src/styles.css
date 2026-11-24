@@ -115,10 +115,15 @@ tr.clickable:hover { background: #f1f5f9; }
 .sched tr.row-none.pm td { background-color: #fbeaea; }
 .sched tr.row-company th.sticky { background: #f0fdf4; }
 .sched .hol { font-size: 10px; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.leave-tag { font-size: 11px; font-weight: 700; color: #4b5563; display: flex; gap: 6px; align-items: center; line-height: 1.4; }
+.leave-tag {
+  font-size: 11px; font-weight: 700; color: #374151; display: inline-flex; gap: 4px; align-items: center; line-height: 1.4;
+  background: #fff; border: 1px solid #9ca3af; border-radius: 4px; padding: 0 2px 0 5px; margin: 1px 2px 1px 0; cursor: grab;
+}
+.leave-tag.request { color: #6d28d9; border-color: #a78bfa; }
+.leave-x { background: none; border: none; color: #9ca3af; padding: 0 2px; font-size: 12px; line-height: 1; }
+.leave-x:hover { color: var(--danger); }
+.sched td.leave.leave-request { background: repeating-linear-gradient(45deg, #f5f3ff, #f5f3ff 6px, #ede9fe 6px, #ede9fe 12px); }
 .leave-count { font-size: 10px; color: var(--muted); font-weight: 400; white-space: nowrap; margin-top: 2px; }
-.add-btn.leave-btn { font-size: 10px; color: #6b7280; border-color: #cbd5e1; }
-.add-btn.leave-btn:hover { background: #6b7280; color: #fff; }
 .job.dim { opacity: .2; }
 .search-panel { margin-bottom: 10px; padding: 10px; }
 .search-grid { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr auto auto; gap: 8px; align-items: center; }
@@ -164,7 +169,8 @@ tr.clickable:hover { background: #f1f5f9; }
 .modal { background: #fff; border-radius: 12px; width: 100%; max-width: 720px; max-height: 90vh; overflow: auto; padding: 16px 20px; }
 .modal.wide { max-width: 1040px; padding: 12px 20px; }
 .job-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 20px; align-content: start; }
-.job-form > .note-field, .job-form > .actions { grid-column: 1 / -1; }
+.job-form > .note-field, .job-form > .actions, .job-form > .job-form-header { grid-column: 1 / -1; }
+.reg-tabs { align-self: start; justify-self: start; }
 .job-form .form { gap: 8px; align-content: start; }
 .job-form .boxed { padding: 8px 10px; }
 .job-form input, .job-form select, .job-form textarea { padding: 5px 8px; }

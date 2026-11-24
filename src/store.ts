@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import JapaneseHolidays from 'japanese-holidays'
-import type { DB, Job, RecurRule } from './types'
+import type { DB, Driver, Job, LeaveKind, RecurRule } from './types'
 
 // ---- 日付ユーティリティ（ローカル日付を YYYY-MM-DD で扱う） ----
 export const ymd = (d: Date) =>
@@ -68,12 +68,13 @@ export const CARD_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6
 
 /**
  * 予定表の行の並び順（"d:ID" = 自社・個人ドライバー, "c:ID" = 委託会社）。
- * rowOrder に無い行は 正社員 → 個人 → 会社 の順で末尾に追加する。
+ * rowOrder に無い行は 正社員 → 個人 → 独立行の所属ドライバー → 会社 の順で末尾に追加する。
  */
 export function orderedRowKeys(db: DB): string[] {
   const all = [
     ...db.drivers.filter((d) => d.kind === 'employee').map((d) => `d:${d.id}`),
     ...db.drivers.filter((d) => d.kind === 'individual').map((d) => `d:${d.id}`),
+    ...db.drivers.filter(hasOwnRow).map((d) => `d:${d.id}`),
     ...db.companies.map((c) => `c:${c.id}`),
   ]
   const valid = new Set(all)
@@ -81,9 +82,17 @@ export function orderedRowKeys(db: DB): string[] {
   return [...saved, ...all.filter((k) => !saved.includes(k))]
 }
 
-/** 指定ドライバーの、ある月（YYYY-MM）の休暇日数 */
-export const leaveCount = (db: DB, driverId: string, ym: string) =>
-  db.leaves.filter((l) => l.driverId === driverId && l.date.startsWith(ym)).length
+/** 所属会社のドライバーで、独立した行で表示するもの */
+export const hasOwnRow = (d: Driver) => d.kind === 'company' && !!d.ownRow
+
+/** 指定ドライバーの、ある月（YYYY-MM）の休暇日数（種類別） */
+export const leaveCount = (db: DB, driverId: string, ym: string, kind: LeaveKind) =>
+  db.leaves.filter((l) => l.driverId === driverId && l.date.startsWith(ym) && (l.kind ?? 'normal') === kind).length
+
+export const LEAVE_LABEL: Record<LeaveKind, { short: string; long: string }> = {
+  normal: { short: '休', long: '通常休暇' },
+  request: { short: '希', long: '希望休' },
+}
 
 export const WEEKDAYS_MON_FIRST = [1, 2, 3, 4, 5, 6, 0]
 
@@ -130,7 +139,7 @@ function seed(): DB {
       { id: 'd2', fullName: '佐藤 次郎', kana: 'さとう じろう', phone: '090-2222-2222', displayName: '佐藤', kind: 'individual', showOnCalendar: true },
       { id: 'd3', fullName: '鈴木 三郎', kana: 'すずき さぶろう', phone: '090-3333-3333', displayName: '鈴木', kind: 'individual', showOnCalendar: true },
       { id: 'd4', fullName: '高橋 四郎', kana: 'たかはし しろう', phone: '090-4444-4444', displayName: '高橋(ABC)', kind: 'company', companyId: 'c1', showOnCalendar: true },
-      { id: 'd5', fullName: '田中 五郎', kana: 'たなか ごろう', phone: '090-5555-5555', displayName: '田中(ABC)', kind: 'company', companyId: 'c1', showOnCalendar: true },
+      { id: 'd5', fullName: '田中 五郎', kana: 'たなか ごろう', phone: '090-5555-5555', displayName: '田中(ABC)', kind: 'company', companyId: 'c1', showOnCalendar: true, ownRow: true },
       { id: 'd6', fullName: '伊藤 六郎', kana: 'いとう ろくろう', phone: '090-6666-6666', displayName: '伊藤', kind: 'individual', showOnCalendar: false },
     ],
     clients: [
@@ -139,7 +148,7 @@ function seed(): DB {
       { id: 'k3', name: '□□ネット通販', color: '#f59e0b' },
     ],
     jobs: [],
-    leaves: [{ id: uid(), driverId: 'd3', date: addDays(ws, 2) }, { id: uid(), driverId: 'd1', date: addDays(ws, 5) }],
+    leaves: [{ id: uid(), driverId: 'd3', date: addDays(ws, 2) }, { id: uid(), driverId: 'd1', date: addDays(ws, 5) }, { id: uid(), driverId: 'd2', date: addDays(ws, 6), kind: 'request' }],
     memos: [
       { id: uid(), date: addDays(ws, 1), driverId: null, time: '', text: '〇〇物流 年末増便の打診あり', color: '#fde68a' },
       { id: uid(), date: addDays(ws, 3), driverId: 'd2', time: '13:00', text: '車両点検（午後）', color: '#bfdbfe' },

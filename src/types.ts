@@ -17,6 +17,8 @@ export interface Driver {
   kind: DriverKind
   companyId?: ID // kind === 'company' のとき
   showOnCalendar: boolean
+  /** 所属会社のドライバーを、会社の行とは別に独立した行で表示する */
+  ownRow?: boolean
 }
 
 export interface Client {
@@ -72,10 +74,14 @@ export interface Memo {
   color: string
 }
 
+/** 通常休暇 / 希望休 */
+export type LeaveKind = 'normal' | 'request'
+
 export interface Leave {
   id: ID
   driverId: ID
   date: string
+  kind?: LeaveKind // 未指定は通常休暇
 }
 
 export interface Repair {

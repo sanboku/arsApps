@@ -31,7 +31,7 @@ export default function Drivers({ store }: { store: Store }) {
                 <td><b>{d.displayName}</b></td>
                 <td>{d.fullName}<div className="muted small">{d.kana}</div></td>
                 <td><a href={`tel:${d.phone}`}>{d.phone}</a></td>
-                <td>{KIND_LABEL[d.kind]}{d.companyId && <div className="muted small">{db.companies.find((c) => c.id === d.companyId)?.name}</div>}</td>
+                <td>{KIND_LABEL[d.kind]}{d.companyId && <div className="muted small">{db.companies.find((c) => c.id === d.companyId)?.name}{d.ownRow && '・独立行'}</div>}</td>
                 <td>{d.showOnCalendar ? '○' : <span className="muted">非表示</span>}</td>
                 <td className="nowrap">
                   <button className="ghost small" onClick={() => setJobFor(d.id)}>案件作成</button>
@@ -80,6 +80,9 @@ function DriverForm({ store, initial, onClose }: { store: Store; initial: Driver
           )}
         </div>
         <label className="inline"><input type="checkbox" checked={d.showOnCalendar} onChange={(e) => set('showOnCalendar', e.target.checked)} />予定表に常に表示する（オフでも案件がある週は表示）</label>
+        {d.kind === 'company' && (
+          <label className="inline"><input type="checkbox" checked={!!d.ownRow} onChange={(e) => set('ownRow', e.target.checked)} />会社の行とは別に、独立した行で表示する</label>
+        )}
         <div className="actions">
           {exists && (
             <button className="danger-btn" onClick={() => {
@@ -93,7 +96,7 @@ function DriverForm({ store, initial, onClose }: { store: Store; initial: Driver
           <button onClick={() => {
             if (!d.fullName || !d.displayName) return alert('フルネームと表示名は必須です')
             if (d.kind === 'company' && !d.companyId) return alert('所属会社を選択してください')
-            const clean = d.kind === 'company' ? d : { ...d, companyId: undefined }
+            const clean = d.kind === 'company' ? d : { ...d, companyId: undefined, ownRow: undefined }
             update((db) => ({ ...db, drivers: exists ? db.drivers.map((x) => (x.id === d.id ? clean : x)) : [...db.drivers, clean] }))
             onClose()
           }}>保存</button>
@@ -135,7 +138,7 @@ function RowOrderEditor({ store }: { store: Store }) {
   const moveInCompany = (driverId: string, dir: -1 | 1) =>
     update((db) => {
       const d = db.drivers.find((x) => x.id === driverId)!
-      const same = db.drivers.filter((x) => x.companyId === d.companyId)
+      const same = db.drivers.filter((x) => x.companyId === d.companyId && !x.ownRow)
       const k = same.findIndex((x) => x.id === driverId)
       const other = same[k + dir]
       if (!other) return db
@@ -147,7 +150,8 @@ function RowOrderEditor({ store }: { store: Store }) {
     const [t, id] = key.split(':')
     if (t === 'c') return `🏢 ${db.companies.find((c) => c.id === id)?.name}`
     const d = db.drivers.find((x) => x.id === id)!
-    return `${d.displayName}${d.kind === 'employee' ? '（社員）' : ''}${d.showOnCalendar ? '' : '　※通常非表示'}`
+    const company = d.ownRow && d.kind === 'company' ? `（${db.companies.find((c) => c.id === d.companyId)?.name}所属・独立行）` : ''
+    return `${d.displayName}${d.kind === 'employee' ? '（社員）' : ''}${company}${d.showOnCalendar ? '' : '　※通常非表示'}`
   }
   return (
     <section className="card">
@@ -163,7 +167,7 @@ function RowOrderEditor({ store }: { store: Store }) {
             </div>
             {k.startsWith('c:') && (
               <ol className="order-list inner">
-                {db.drivers.filter((d) => d.companyId === k.slice(2)).map((d, j, arr) => (
+                {db.drivers.filter((d) => d.companyId === k.slice(2) && !d.ownRow).map((d, j, arr) => (
                   <li key={d.id} className="row">
                     <span className="spacer">{d.displayName}</span>
                     <button className="ghost small" disabled={j === 0} onClick={() => moveInCompany(d.id, -1)} aria-label="上へ">▲</button>

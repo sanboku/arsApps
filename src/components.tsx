@@ -79,11 +79,13 @@ const DEFAULT_RULE: RecurRule = { freq: 'dow', dows: [1, 2, 3, 4, 5], holidays: 
  *   編集画面で繰り返し設定を変えると、その日より後のカードを新しい設定で作り直す。
  * - 複数台案件は台数分のカードを作り、グループIDでつなぐ（車両ごとに担当者を割り当てられる）。
  */
-export function JobForm({ db, initial, isNew, title, defaultType, onSave, onDelete, onClose }: {
+export function JobForm({ db, initial, isNew, title, header, defaultType, onSave, onDelete, onClose }: {
   db: DB
   initial: Partial<Job>
   isNew: boolean
   title?: string
+  /** フォーム上部に出す要素（予定表の「登録の種類」タブなど） */
+  header?: ReactNode
   defaultType?: SeriesType
   onSave: (fn: (db: DB) => DB) => void
   onDelete?: (fn: (db: DB) => DB) => void
@@ -212,6 +214,7 @@ export function JobForm({ db, initial, isNew, title, defaultType, onSave, onDele
   return (
     <Modal title={title ?? (isNew ? '案件登録' : '案件編集')} onClose={onClose} wide>
       <div className="job-form">
+      {header && <div className="job-form-header">{header}</div>}
       <div className="form col">
         <div className="grid2">
           <label className="field"><span>日付{isNew && seriesType ? '（開始日）' : ''}</span>
