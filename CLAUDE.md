@@ -11,5 +11,6 @@
 
 ## 開発
 - `npm install` → `npm run dev`（ログイン: admin / password）
+- 利用者は `npm run auto`（`scripts/auto-update.mjs`）で起動しており、作業ブランチへの push を30秒以内に自動で取り込む。**push = 利用者の画面に即反映**なので、`npm run build` が通った状態でだけ push する。
 - `npm run build` で型チェック＋ビルド。コミット前に必ず通す。
 - データ構造（`src/types.ts`）に項目を追加したら、`store.ts` の `load()` で古いデータに既定値を補う。互換性のない変更のときだけ `KEY` のバージョンを上げる（利用者のテストデータが消える）。

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "auto": "node scripts/auto-update.mjs",
     "build": "tsc -p . && vite build",
     "preview": "vite preview"
   },
