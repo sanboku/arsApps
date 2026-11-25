@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import * as XLSX from 'xlsx'
 import type { Payee, Store } from '../store'
-import { fmtMD, isClosed, payeeOf, profitRate, routeText, today, uid, yen } from '../store'
-import type { BillingDoc, Job, Rate, Settings } from '../types'
+import { fmtMD, isClosed, payeeOf, pieceText, profitRate, routeText, today, uid, withPiece, yen } from '../store'
+import type { BillingDoc, Job, Rate, SendStatus, Settings } from '../types'
 import { JobForm, Modal } from '../components'
-import DocEditor, { buildDoc, partyTotal } from './DocEditor'
+import DocEditor, { SEND_STATUSES, buildDoc, partyTotal } from './DocEditor'
 
 type Tab = 'ledger' | 'client' | 'payee' | 'docs' | 'rates' | 'settings'
 const TABS: [Tab, string][] = [
@@ -44,6 +44,7 @@ export default function Billing({ store }: { store: Store }) {
   const [tab, setTab] = useState<Tab>('ledger')
   const [clientFilter, setClientFilter] = useState('')
   const [payeeFilter, setPayeeFilter] = useState('')
+  const [doneFilter, setDoneFilter] = useState<'' | 'done' | 'open'>('')
   const [editJob, setEditJob] = useState<Job | null>(null)
   const [openDoc, setOpenDoc] = useState<string | null>(null)
 
@@ -52,7 +53,10 @@ export default function Billing({ store }: { store: Store }) {
   const client = (j: Job) => db.clients.find((c) => c.id === j.clientId)
   const driver = (j: Job) => db.drivers.find((d) => d.id === j.driverId)
   const payee = (j: Job) => payeeOf(db, j.driverId)
-  const jobs = monthJobs.filter((j) => (!clientFilter || (j.clientId ?? 'none') === clientFilter) && (!payeeFilter || (payee(j)?.key ?? 'none') === payeeFilter))
+  const jobs = monthJobs.filter((j) =>
+    (!clientFilter || (j.clientId ?? 'none') === clientFilter) &&
+    (!payeeFilter || (payee(j)?.key ?? 'none') === payeeFilter) &&
+    (!doneFilter || (doneFilter === 'done') === !!j.done))
   const total = {
     bill: jobs.reduce((s, j) => s + j.billAmount, 0),
     pay: jobs.reduce((s, j) => s + j.payAmount, 0),
@@ -62,6 +66,7 @@ export default function Billing({ store }: { store: Store }) {
   const unassigned = monthJobs.filter((j) => !j.driverId).length
   const noAmount = monthJobs.filter((j) => !j.billAmount).length
   const noClient = monthJobs.filter((j) => !j.clientId).length
+  const notDone = monthJobs.filter((j) => !j.done).length
 
   const byClient = summarize(monthJobs, (j) => (client(j) ? { key: `client:${j.clientId}`, label: client(j)!.name, official: client(j)!.officialName } : { key: 'client:none', label: '（請求先未設定）' }))
   // 支払先ごと。自社正社員は支払はないが、売上を見るために1人ずつ分けて集計する
@@ -77,7 +82,7 @@ export default function Billing({ store }: { store: Store }) {
   const setJob = (id: string, patch: Partial<Job>) => update((db) => ({ ...db, jobs: db.jobs.map((j) => (j.id === id ? { ...j, ...patch } : j)) }))
 
   const close = () => {
-    const warn = [unassigned && `担当者未定：${unassigned}件`, noClient && `請求先未設定：${noClient}件`, noAmount && `請求額が0円：${noAmount}件`].filter(Boolean)
+    const warn = [notDone && `未完了：${notDone}件`, unassigned && `担当者未定：${unassigned}件`, noClient && `請求先未設定：${noClient}件`, noAmount && `請求額が0円：${noAmount}件`].filter(Boolean)
     const msg = `${month.replace('-', '年')}月を締めますか？\n締めると、この月の案件・金額は変更できなくなります。${warn.length ? `\n\n【確認】\n${warn.join('\n')}` : ''}`
     if (!confirm(msg)) return
     update((db) => ({ ...db, closedMonths: [...db.closedMonths, month] }))
@@ -90,10 +95,11 @@ export default function Billing({ store }: { store: Store }) {
 
   const exportLedger = () => {
     const rows = jobs.map((j) => ({
+      状態: j.done ? '完了' : '未完了',
       日付: j.date,
       担当者: driver(j)?.displayName ?? '未定',
       所属: payee(j)?.kind === 'driver' ? '個人' : payee(j)?.short ?? '',
-      内容: routeText(j),
+      内容: `${routeText(j)}${j.piece ? ` 個配 ${pieceText(j.piece, j.piece.billUnit)}` : ''}`,
       距離km: j.distance ?? '',
       立替金: j.advance ?? '',
       請求先: client(j)?.name ?? '',
@@ -144,12 +150,23 @@ export default function Billing({ store }: { store: Store }) {
               {payees.map((p) => <option key={p.key} value={p.key}>{p.kind === 'driver' ? `${p.short}（個人）` : p.short}</option>)}
               <option value="none">（担当者未定）</option>
             </select>
+            <select value={doneFilter} onChange={(e) => setDoneFilter(e.target.value as typeof doneFilter)}>
+              <option value="">状態：すべて</option>
+              <option value="open">未完了のみ</option>
+              <option value="done">完了のみ</option>
+            </select>
             <span className="spacer" />
+            {!closed && jobs.some((j) => !j.done) && (
+              <button className="ghost" onClick={() => {
+                const ids = new Set(jobs.filter((j) => !j.done).map((j) => j.id))
+                if (confirm(`表示中の未完了 ${ids.size}件 をすべて「完了」にしますか？`)) update((db) => ({ ...db, jobs: db.jobs.map((j) => (ids.has(j.id) ? { ...j, done: true } : j)) }))
+              }}>表示中の未完了をすべて完了に</button>
+            )}
             <button className="secondary" onClick={exportLedger}>Excel出力</button>
           </div>
-          {(unassigned > 0 || noClient > 0 || noAmount > 0) && (
+          {(notDone > 0 || unassigned > 0 || noClient > 0 || noAmount > 0) && (
             <p className="small warn-text">
-              確認：{[unassigned && `担当者未定 ${unassigned}件`, noClient && `請求先未設定 ${noClient}件`, noAmount && `請求額0円 ${noAmount}件`].filter(Boolean).join('・')}（黄色の行）
+              確認：{[notDone && `未完了 ${notDone}件`, unassigned && `担当者未定 ${unassigned}件`, noClient && `請求先未設定 ${noClient}件`, noAmount && `請求額0円 ${noAmount}件`].filter(Boolean).join('・')}（担当者未定・請求先未設定・請求額0円は黄色の行）
             </p>
           )}
           <p className="small muted">
@@ -161,8 +178,8 @@ export default function Billing({ store }: { store: Store }) {
             <table className="ledger">
               <thead>
                 <tr>
-                  <th>日付</th><th>担当者</th><th>所属</th><th>内容</th><th className="right">距離(km)</th><th className="right">立替金</th><th>請求先</th>
-                  <th className="right">請求額</th><th className="right">支払額</th><th className="right">利益率</th>
+                  <th>状態</th><th>日付</th><th>担当者</th><th>所属</th><th>内容</th><th className="right">距離(km)</th><th className="right">立替金</th><th>請求先</th>
+                  <th className="right">請求額</th><th className="right">支払額</th><th className="right">利益率</th><th>備考</th>
                 </tr>
               </thead>
               <tbody>
@@ -170,30 +187,48 @@ export default function Billing({ store }: { store: Store }) {
                   const p = payee(j)
                   const warn = !j.driverId || !j.clientId || !j.billAmount
                   return (
-                    <tr key={j.id} className={warn ? 'warn-row' : ''}>
+                    <tr key={j.id} className={`${warn ? 'warn-row' : ''} ${j.done ? 'done-row' : ''}`}>
+                      <td>
+                        <button className={`status-btn ${j.done ? 'on' : ''}`} disabled={closed} title="押すと完了／未完了が切り替わります" onClick={() => setJob(j.id, { done: !j.done })}>
+                          {j.done ? '✓ 完了' : '未完了'}
+                        </button>
+                      </td>
                       <td className="nowrap">{fmtMD(j.date)}</td>
                       <td className="nowrap">{driver(j)?.displayName ?? <b className="danger">未定</b>}</td>
                       <td className="nowrap">{p ? (p.kind === 'driver' ? <span className="muted">個人</span> : p.short) : '—'}</td>
-                      <td><button className="link" onClick={() => setEditJob(j)}>{routeText(j)}</button>{j.groupId && <span className="small muted">（複数台）</span>}</td>
+                      <td>
+                        <button className="link" onClick={() => setEditJob(j)}>{routeText(j)}</button>{j.groupId && <span className="small muted">（複数台）</span>}
+                        {j.piece && (
+                          <div className="piece-cell small">
+                            <span className="badge piece">個配</span>
+                            <input className="num short" type="number" min={0} disabled={closed} value={j.piece.qty || ''} placeholder="数量"
+                              onChange={(e) => setJob(j.id, withPiece({ ...j, piece: { ...j.piece!, qty: +e.target.value } }))} />
+                            {j.piece.unit}
+                            <span className="muted"> 請求@{j.piece.billUnit.toLocaleString()}・支払@{j.piece.payUnit.toLocaleString()}</span>
+                          </div>
+                        )}
+                      </td>
                       <td className="right"><input className="num short" type="number" min={0} disabled={closed} value={j.distance ?? ''} onChange={(e) => setJob(j.id, { distance: e.target.value === '' ? undefined : +e.target.value })} /></td>
                       <td className="right"><input className="num mid" type="number" min={0} disabled={closed} value={j.advance || ''} onChange={(e) => setJob(j.id, { advance: e.target.value === '' ? undefined : +e.target.value })} /></td>
                       <td className="nowrap"><i className="dot" style={{ background: client(j)?.color }} />{client(j)?.name ?? <span className="danger">未設定</span>}</td>
-                      <td className="right"><input className="num" type="number" min={0} disabled={closed} value={j.billAmount} onChange={(e) => setJob(j.id, { billAmount: +e.target.value })} /></td>
-                      <td className="right"><input className="num" type="number" min={0} disabled={closed} value={j.payAmount} onChange={(e) => setJob(j.id, { payAmount: +e.target.value })} /></td>
+                      <td className="right"><input className="num" type="number" min={0} disabled={closed || !!j.piece} title={j.piece ? '個配は 数量×単価 で自動計算されます' : undefined} value={j.billAmount} onChange={(e) => setJob(j.id, { billAmount: +e.target.value })} /></td>
+                      <td className="right"><input className="num" type="number" min={0} disabled={closed || !!j.piece} title={j.piece ? '個配は 数量×単価 で自動計算されます' : undefined} value={j.payAmount} onChange={(e) => setJob(j.id, { payAmount: +e.target.value })} /></td>
                       <td className="right nowrap">{rateText(j.billAmount, j.payAmount)}</td>
+                      <td><input className="note-input" disabled={closed} value={j.note} onChange={(e) => setJob(j.id, { note: e.target.value })} /></td>
                     </tr>
                   )
                 })}
               </tbody>
               <tfoot>
                 <tr>
-                  <th colSpan={4}>合計（{jobs.length}件）</th>
+                  <th colSpan={5}>合計（{jobs.length}件・完了 {jobs.filter((j) => j.done).length}件）</th>
                   <th className="right">{total.distance.toLocaleString()}</th>
                   <th className="right">{yen(total.advance)}</th>
                   <th></th>
                   <th className="right">{yen(total.bill)}</th>
                   <th className="right">{yen(total.pay)}</th>
                   <th className="right">{rateText(total.bill, total.pay)}</th>
+                  <th></th>
                 </tr>
               </tfoot>
             </table>
@@ -298,7 +333,7 @@ function DocsTab({ store, month, closed, onClose, onOpen, byClient, byPayee }: {
   }
   const section = (kind: BillingDoc['kind'], rows: ReturnType<typeof summarize>) => (
     <table>
-      <thead><tr><th>宛先（略称）</th><th>正式名称</th><th className="right">件数</th><th className="right">金額（税抜）</th><th className="right">立替金</th><th>状態</th><th></th></tr></thead>
+      <thead><tr><th>宛先（略称）</th><th>正式名称</th><th className="right">件数</th><th className="right">金額（税抜）</th><th className="right">立替金</th><th>作成</th><th>送付状況</th><th></th></tr></thead>
       <tbody>
         {rows.filter((r) => r.key.startsWith('client:') || r.key.startsWith('company:') || r.key.startsWith('driver:')).map((r) => {
           const ok = r.key !== 'client:none'
@@ -316,7 +351,18 @@ function DocsTab({ store, month, closed, onClose, onOpen, byClient, byPayee }: {
                 {!ok ? <span className="muted">対象外</span> : !doc ? <span className="muted">未作成</span> : doc.edited ? '編集済み' : '作成済み'}
                 {changed && <div className="small warn-text">作成後に管理表が変わっています</div>}
               </td>
-              <td className="nowrap">{ok && <button className="small" onClick={() => open(kind, r.key)}>{doc ? '開く' : '作成して開く'}</button>}</td>
+              <td>
+                {doc ? (
+                  <select className={`send-${doc.sendStatus ?? '未送付'}`} value={doc.sendStatus ?? '未送付'} onChange={(e) => {
+                    const v = e.target.value as SendStatus
+                    update((db) => ({ ...db, docs: db.docs.map((d) => (d.id === doc.id ? { ...d, sendStatus: v, sentAt: v === '送付済み' ? today() : d.sentAt } : d)) }))
+                  }}>
+                    {SEND_STATUSES.map((x) => <option key={x}>{x}</option>)}
+                  </select>
+                ) : <span className="muted">—</span>}
+                {doc?.sendStatus === '送付済み' && doc.sentAt && <div className="small muted">{fmtMD(doc.sentAt)} 送付</div>}
+              </td>
+              <td className="nowrap">{ok && <button className="small" onClick={() => open(kind, r.key)}>{doc ? '編集' : '作成して編集'}</button>}</td>
             </tr>
           )
         })}
@@ -360,11 +406,12 @@ function RatesTab({ store, payees }: { store: Store; payees: Payee[] }) {
       </div>
       <div className="scroll-x">
         <table>
-          <thead><tr><th>名称</th><th>請求先</th><th>適用期間</th><th className="right">請求額</th><th className="right">支払額（標準）</th><th>支払先ごとの支払額</th><th className="right">距離</th><th className="right">使用</th></tr></thead>
+          <thead><tr><th>名称</th><th>種類</th><th>請求先</th><th>適用期間</th><th className="right">請求額・単価</th><th className="right">支払額・単価（標準）</th><th>支払先ごとの支払額</th><th className="right">距離</th><th className="right">使用</th></tr></thead>
           <tbody>
             {db.rates.map((r) => (
               <tr key={r.id} className="clickable" onClick={() => setEdit(r)}>
                 <td><b>{r.name}</b>{r.note && <div className="small muted">{r.note}</div>}</td>
+                <td className="nowrap">{r.mode === 'piece' ? `個配（1${r.unit ?? '個'}あたり）` : '1件ごと'}</td>
                 <td>{db.clients.find((c) => c.id === r.clientId)?.name ?? '（指定なし）'}</td>
                 <td className="nowrap">{r.from || r.to ? `${r.from || '…'} 〜 ${r.to || '…'}` : '通年'}</td>
                 <td className="right">{yen(r.billAmount)}</td>
@@ -402,13 +449,28 @@ function RateForm({ store, initial, payees, onClose }: { store: Store; initial: 
           <label className="field"><span>適用開始日（空欄＝制限なし）</span><input type="date" value={r.from} onChange={(e) => set('from', e.target.value)} /></label>
           <label className="field"><span>適用終了日（空欄＝制限なし）</span><input type="date" value={r.to} onChange={(e) => set('to', e.target.value)} /></label>
         </div>
+        <div className="grid2">
+          <label className="field"><span>種類</span>
+            <select value={r.mode ?? 'fixed'} onChange={(e) => set('mode', e.target.value as Rate['mode'])}>
+              <option value="fixed">1件ごとの金額</option>
+              <option value="piece">個配（数量 × 単価）</option>
+            </select>
+          </label>
+          {r.mode === 'piece' && (
+            <label className="field"><span>単位</span>
+              <select value={r.unit ?? '個'} onChange={(e) => set('unit', e.target.value)}>
+                {['個', '軒', '件', '口'].map((u) => <option key={u}>{u}</option>)}
+              </select>
+            </label>
+          )}
+        </div>
         <div className="grid3">
-          <label className="field"><span>請求額(円)</span><input type="number" min={0} value={r.billAmount} onChange={(e) => set('billAmount', +e.target.value)} /></label>
-          <label className="field"><span>支払額・標準(円)</span><input type="number" min={0} value={r.payDefault} onChange={(e) => set('payDefault', +e.target.value)} /></label>
+          <label className="field"><span>{r.mode === 'piece' ? `請求単価(円／1${r.unit ?? '個'})` : '請求額(円)'}</span><input type="number" min={0} value={r.billAmount} onChange={(e) => set('billAmount', +e.target.value)} /></label>
+          <label className="field"><span>{r.mode === 'piece' ? '支払単価・標準(円)' : '支払額・標準(円)'}</span><input type="number" min={0} value={r.payDefault} onChange={(e) => set('payDefault', +e.target.value)} /></label>
           <label className="field"><span>標準の距離(km)</span><input type="number" min={0} value={r.distance ?? ''} onChange={(e) => set('distance', e.target.value === '' ? undefined : +e.target.value)} /></label>
         </div>
         <div className="boxed">
-          <span className="small"><b>支払先ごとの支払額</b>（ここにない支払先は「標準」の額。自社正社員は0円）</span>
+          <span className="small"><b>支払先ごとの{r.mode === 'piece' ? '支払単価' : '支払額'}</b>（ここにない支払先は「標準」の額。自社正社員は0円）</span>
           {Object.entries(r.payByPayee).map(([k, v]) => (
             <div className="row" key={k}>
               <span className="spacer">{payees.find((p) => p.key === k)?.short ?? k}</span>

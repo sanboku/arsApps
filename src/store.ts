@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import JapaneseHolidays from 'japanese-holidays'
-import type { DB, Driver, Job, LeaveKind, PartyInfo, Rate, RecurRule, SeriesType, Settings } from './types'
+import type { DB, Driver, Job, LeaveKind, PartyInfo, Piece, Rate, RecurRule, SeriesType, Settings } from './types'
 
 // ---- 日付ユーティリティ（ローカル日付を YYYY-MM-DD で扱う） ----
 export const ymd = (d: Date) =>
@@ -53,7 +53,7 @@ export const byTime = (a: Job, b: Job) =>
 export const routeText = (j: Job) => {
   const p = j.pickups.filter(Boolean).join('・')
   const d = j.dropoffs.filter(Boolean).join('・')
-  return d ? `${p || '—'} → ${d}` : p || '—'
+  return d ? `${p || '—'} 〜 ${d}` : p || '—'
 }
 
 /** 背景色に対して読みやすい文字色 */
@@ -85,9 +85,9 @@ export function orderedRowKeys(db: DB): string[] {
 /** 所属会社のドライバーで、独立した行で表示するもの */
 export const hasOwnRow = (d: Driver) => d.kind === 'company' && !!d.ownRow
 
-/** 指定ドライバーの、ある月（YYYY-MM）の休暇日数（種類別） */
-export const leaveCount = (db: DB, driverId: string, ym: string, kind: LeaveKind) =>
-  db.leaves.filter((l) => l.driverId === driverId && l.date.startsWith(ym) && (l.kind ?? 'normal') === kind).length
+/** 指定ドライバーの、ある月（YYYY-MM）の休暇日数（通常休暇・希望休の合計） */
+export const leaveCount = (db: DB, driverId: string, ym: string) =>
+  db.leaves.filter((l) => l.driverId === driverId && l.date.startsWith(ym)).length
 
 export const LEAVE_LABEL: Record<LeaveKind, { short: string; long: string }> = {
   normal: { short: '休', long: '通常休暇' },
@@ -121,6 +121,20 @@ export const ratesFor = (db: DB, date: string, clientId: string | null) =>
 
 /** 単価マスタから、支払先に応じた支払額 */
 export const payFromRate = (r: Rate, payeeKey: string | undefined) => (payeeKey && payeeKey in r.payByPayee ? r.payByPayee[payeeKey] : r.payDefault)
+/** 個配なら数量×単価で請求額・支払額を計算し直す */
+export const withPiece = (j: Job): Job => (j.piece ? { ...j, billAmount: j.piece.qty * j.piece.billUnit, payAmount: j.piece.qty * j.piece.payUnit } : j)
+
+/** 個配の表示（例：120個 × @100） */
+export const pieceText = (p: Piece, unitPrice: number) => `${p.qty.toLocaleString()}${p.unit} × @${unitPrice.toLocaleString()}`
+
+/** 担当者が変わったときの支払額（単価マスタ適用中なら支払先に応じた額・単価に） */
+export function repriceForDriver(db: DB, j: Job, driverId: string | null): Job {
+  const r = db.rates.find((x) => x.id === j.rateId)
+  if (!r) return { ...j, driverId }
+  if (j.piece) return withPiece({ ...j, driverId, piece: { ...j.piece, payUnit: ratePay(db, r, driverId) } })
+  return { ...j, driverId, payAmount: ratePay(db, r, driverId) }
+}
+
 /** 単価マスタから、担当者に応じた支払額（自社正社員は0） */
 export const ratePay = (db: DB, r: Rate, driverId: string | null) => {
   const p = payeeOf(db, driverId)
@@ -208,6 +222,7 @@ function seed(): DB {
       { id: 'r1', name: 'A物流 定期便', clientId: 'k1', from: '', to: '', billAmount: 25000, payDefault: 18000, payByPayee: {}, distance: 60, note: '平日毎日の固定業務' },
       { id: 'r2', name: '年末増便（A物流）', clientId: 'k1', from: `${today().slice(0, 4)}-12-01`, to: `${today().slice(0, 4)}-12-31`, billAmount: 30000, payDefault: 21000, payByPayee: { 'company:c1': 22000 }, distance: 45, note: '12月限定。E運送は22,000円' },
       { id: 'r3', name: 'D食品 冷凍便', clientId: 'k4', from: '', to: '', billAmount: 22000, payDefault: 17000, payByPayee: {}, distance: 50, note: '' },
+      { id: 'r4', name: 'C通販 個配', clientId: 'k3', from: '', to: '', billAmount: 100, payDefault: 80, payByPayee: { 'company:c2': 75 }, note: '1個あたり。F急便は75円', mode: 'piece', unit: '個' },
     ],
     closedMonths: [],
     docs: [],
@@ -216,6 +231,8 @@ function seed(): DB {
     memos: [
       { id: uid(), date: today(), driverId: null, time: '', text: 'A物流より12月の増便の打診あり', color: '#fde68a' },
       { id: uid(), date: addDays(today(), 1), driverId: 'd4', time: '13:00', text: '車両点検（午後）', color: '#bfdbfe' },
+      { id: uid(), date: day(3), driverId: null, time: '', text: 'C通販 個配エリア拡大の相談（来月から）', color: '#fde68a' },
+      { id: uid(), date: day(16), driverId: 'd3', time: '09:00', text: '佐藤さん 健康診断のため出発遅れ', color: '#fecaca' },
     ],
     vehicles: [
       { id: 'v1', plate: '品川 480 あ 12-34', name: 'ハイゼット', inspectionDate: addDays(today(), 20), lentTo: '佐藤', lastUsed: addDays(today(), -1), repairs: [{ date: addDays(today(), -60), description: 'タイヤ交換', cost: 32000 }] },
@@ -236,6 +253,10 @@ function seed(): DB {
   series('regular', { ...weekdays, dows: [1, 3, 5] }, { driverId: 'd3', clientId: 'k3', pickups: ['C通販 市川DC'], dropoffs: ['千葉市内'], pickupTime: '09:00', billAmount: 16000, payAmount: 12000, distance: 35 })
   series('regular', { ...weekdays, dows: [2, 4] }, { driverId: 'd7', clientId: 'k4', pickups: ['D食品 冷凍便'], dropoffs: [], pickupTime: '14:00', billAmount: 22000, payAmount: 17000, distance: 50, advance: 800, rateId: 'r3' })
 
+  // 個配（数量×単価）：F急便の小林さんが火木土。数量は実績のある過去日だけ入れておく
+  series('regular', { ...weekdays, dows: [2, 4, 6] }, { driverId: 'd8', clientId: 'k3', pickups: ['C通販 個配（市川エリア）'], dropoffs: [], pickupTime: '10:00', rateId: 'r4', piece: { unit: '個', qty: 0, billUnit: 100, payUnit: 75 } })
+  db.jobs = db.jobs.map((j, i) => (j.piece && j.date < today() ? withPiece({ ...j, piece: { ...j.piece, qty: 110 + ((i * 17) % 60) } }) : j))
+
   // 単発の案件
   const gid = uid()
   db.jobs.push(
@@ -246,6 +267,9 @@ function seed(): DB {
     emptyJob({ date: addDays(today(), 2), driverId: null, clientId: 'k2', pickups: ['B商事 本社'], dropoffs: ['大宮'], pickupTime: '14:00', billAmount: 20000, payAmount: 15000, note: '担当未定・要調整' }),
     emptyJob({ date: addDays(today(), 3), driverId: 'd6', clientId: 'k1', pickups: ['A物流 スポット便'], dropoffs: [], pickupTime: '09:00', billAmount: 20000, payAmount: 15000, distance: 30 }),
   )
+
+  // 過去の案件は完了済みにしておく
+  db.jobs = db.jobs.map((j) => (j.date < today() ? { ...j, done: true } : j))
 
   // 休暇：案件のない日に入れる
   const free = (driverId: string, from: string) => {

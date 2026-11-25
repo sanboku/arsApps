@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { Store } from '../store'
-import { LEAVE_LABEL, addDays, byTime, fmtMD, hasOwnRow, holidayName, isClosed, isPM, ratePay, leaveCount, monthDays, orderedRowKeys, parseYmd, routeText, textColorFor, today, uid, weekStart, ymd } from '../store'
+import { LEAVE_LABEL, addDays, byTime, fmtMD, hasOwnRow, holidayName, isClosed, isPM, repriceForDriver, leaveCount, monthDays, orderedRowKeys, parseYmd, routeText, textColorFor, today, uid, weekStart, ymd } from '../store'
 import type { DB, Job, Leave, LeaveKind, Memo } from '../types'
 import { JobForm, MemoForm, Modal } from '../components'
 
@@ -30,6 +30,7 @@ export default function Schedule({ store }: { store: Store }) {
   const [search, setSearch] = useState<Search>(EMPTY_SEARCH)
   const [showHidden, setShowHidden] = useState(false)
   const [memoForm, setMemoForm] = useState<Partial<Memo> | null>(null)
+  const [memoListOpen, setMemoListOpen] = useState(false)
   const [pick, setPick] = useState<{ key: string; date: string; label: string; driverIds: string[]; copy: boolean } | null>(null)
   const [overKey, setOverKey] = useState('')
   const [hoverGroup, setHoverGroup] = useState<string | null>(null)
@@ -141,10 +142,9 @@ export default function Schedule({ store }: { store: Store }) {
       const src = db.jobs.find((j) => j.id === jobId)
       if (!src) return db
       // 単価マスタ適用中なら、新しい担当（支払先）に応じた支払額にする
-      const r = db.rates.find((x) => x.id === src.rateId)
-      const payAmount = r ? ratePay(db, r, driverId) : src.payAmount
-      if (copy) return { ...db, jobs: [...db.jobs, { ...src, id: uid(), date, driverId, payAmount, seriesId: undefined, seriesType: undefined, seriesRule: undefined, seriesUntil: undefined, groupId: undefined, groupIndex: undefined }] }
-      return { ...db, jobs: db.jobs.map((j) => (j.id === jobId ? { ...j, date, driverId, payAmount } : j)) }
+      const moved = { ...repriceForDriver(db, src, driverId), date }
+      if (copy) return { ...db, jobs: [...db.jobs, { ...moved, id: uid(), done: undefined, seriesId: undefined, seriesType: undefined, seriesRule: undefined, seriesUntil: undefined, groupId: undefined, groupIndex: undefined }] }
+      return { ...db, jobs: db.jobs.map((j) => (j.id === jobId ? moved : j)) }
     })
 
   /** 休暇を置けるか。置けない理由を返す（案件がある日・すでに休暇がある日は不可） */
@@ -197,7 +197,7 @@ export default function Schedule({ store }: { store: Store }) {
     return (
       <div
         key={j.id}
-        className={`job ${j.groupId && hoverGroup === j.groupId ? 'linked' : ''} ${searchActive && !matchJob(j) ? 'dim' : ''}`}
+        className={`job ${j.groupId && hoverGroup === j.groupId ? 'linked' : ''} ${searchActive && !matchJob(j) ? 'dim' : ''} ${j.done ? 'done' : ''}`}
         draggable
         style={{ background: bg, color: textColorFor(bg) }}
         onDragStart={(e) => {
@@ -215,7 +215,9 @@ export default function Schedule({ store }: { store: Store }) {
         {showDriver && <span className="job-driver">{driverOf(j.driverId)?.displayName}</span>}
         {gNo > 0 && <span className="badge" title="複数台案件">{mode === 'week' && '🚚'}{gNo}/{group.length}</span>}
         {j.seriesId && mode === 'week' && (j.seriesType === 'fixed' ? <span className="job-icon" title="固定業務">📌</span> : <span className="job-icon" title="定期案件">🔁</span>)}
+        {j.piece && <span className="badge" title={`個配 ${j.piece.qty}${j.piece.unit}`}>個配</span>}
         <span className="job-text">{text}</span>
+        {j.done && <span className="job-done" title="完了">✓</span>}
       </div>
     )
   }
@@ -271,6 +273,7 @@ export default function Schedule({ store }: { store: Store }) {
           <button onClick={() => setForm({ initial: { date: defaultDate() }, isNew: true, tab: 'job' })}>＋ 案件・休暇登録</button>
           <button className="secondary" onClick={() => setForm({ initial: { date: defaultDate() }, isNew: true, title: '固定業務登録（毎日固定の担当）', fixed: true })}>固定業務登録</button>
           <button className="secondary" onClick={() => setMemoForm({ date: defaultDate() })}>📝 メモ追加</button>
+          <button className="secondary" onClick={() => setMemoListOpen(true)}>📋 メモ一覧（{db.memos.length}）</button>
           <button className={searchActive ? '' : 'secondary'} onClick={() => setSearchOpen(!searchOpen)}>🔍 検索{searchActive ? `（${results.length}件）` : ''}</button>
           <label className="inline small"><input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} />非表示ドライバーも表示</label>
           <a className="small" href="#drivers" title="ドライバー管理画面の「予定表の表示順」で変更します">↕ 表示順を変更</a>
@@ -383,7 +386,7 @@ export default function Schedule({ store }: { store: Store }) {
                       </div>
                       {row.kind === 'driver' && driverOf(row.driverId)?.kind === 'employee' && (
                         <div className="leave-count" title="社員の月間休暇日数">
-                          {parseYmd(cursor).getMonth() + 1}月 休{leaveCount(db, row.driverId, cursor.slice(0, 7), 'normal')}・希{leaveCount(db, row.driverId, cursor.slice(0, 7), 'request')}
+                          {parseYmd(cursor).getMonth() + 1}月 休暇 {leaveCount(db, row.driverId, cursor.slice(0, 7))}日
                         </div>
                       )}
                     </th>
@@ -466,6 +469,17 @@ export default function Schedule({ store }: { store: Store }) {
         />
       )}
       {dayView && <DayView db={db} date={dayView} onClose={() => setDayView(null)} onOpen={(j) => { setDayView(null); setForm({ initial: j, isNew: false }) }} />}
+      {memoListOpen && (
+        <MemoList
+          db={db}
+          onClose={() => setMemoListOpen(false)}
+          onOpen={(m) => {
+            setMemoListOpen(false)
+            setCursor(m.date)
+            setMemoForm(m)
+          }}
+        />
+      )}
       {memoForm && <MemoForm db={db} initial={memoForm} onSave={update} onClose={() => setMemoForm(null)} />}
       {pick && (
         <Modal title="担当者を選択" onClose={() => setPick(null)}>
@@ -480,6 +494,59 @@ export default function Schedule({ store }: { store: Store }) {
         </Modal>
       )}
     </div>
+  )
+}
+
+/** メモ一覧：予定表にあるメモを一覧表示・検索。クリックでその日へ移動して編集 */
+function MemoList({ db, onClose, onOpen }: { db: DB; onClose: () => void; onOpen: (m: Memo) => void }) {
+  const [q, setQ] = useState('')
+  const [driverId, setDriverId] = useState('')
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const name = (id: string | null) => db.drivers.find((d) => d.id === id)?.displayName
+  const list = db.memos
+    .filter((m) => (!q || `${m.text} ${name(m.driverId) ?? ''}`.toLowerCase().includes(q.toLowerCase())) &&
+      (!driverId || (driverId === 'none' ? !m.driverId : m.driverId === driverId)) &&
+      (!from || m.date >= from) && (!to || m.date <= to))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time))
+  return (
+    <Modal title={`メモ一覧（${list.length}件）`} onClose={onClose} wide>
+      <div className="form">
+        <div className="search-grid memo-search">
+          <input placeholder="キーワード（内容・担当者）" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
+          <select value={driverId} onChange={(e) => setDriverId(e.target.value)}>
+            <option value="">担当者：すべて</option>
+            <option value="none">担当者未定（全体）</option>
+            {db.drivers.map((d) => <option key={d.id} value={d.id}>{d.displayName}</option>)}
+          </select>
+          <div className="row">
+            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} title="期間（から）" />〜
+            <input type="date" value={to} onChange={(e) => setTo(e.target.value)} title="期間（まで）" />
+          </div>
+          <button className="ghost" onClick={() => { setQ(''); setDriverId(''); setFrom(''); setTo('') }}>クリア</button>
+        </div>
+        <div className="search-results memo-results">
+          {list.length === 0 ? (
+            <p className="muted small">メモはありません。</p>
+          ) : (
+            <table>
+              <thead><tr><th>日付</th><th>時間</th><th>担当者</th><th>内容</th></tr></thead>
+              <tbody>
+                {list.map((m) => (
+                  <tr key={m.id} className="clickable" onClick={() => onOpen(m)}>
+                    <td className="nowrap">{fmtMD(m.date)}</td>
+                    <td className="nowrap">{m.time || '—'}</td>
+                    <td className="nowrap">{name(m.driverId) ?? <span className="muted">未定（全体）</span>}</td>
+                    <td><i className="dot" style={{ background: m.color }} />{m.text}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <p className="small muted">行をクリックすると、その日の予定表に移動してメモを編集できます。</p>
+      </div>
+    </Modal>
   )
 }
 

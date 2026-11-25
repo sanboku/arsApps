@@ -150,6 +150,8 @@ tr.clickable:hover { background: #f1f5f9; }
 .job.linked { outline: 2px solid #111; outline-offset: 1px; }
 .job-driver { font-weight: 700; background: #0003; border-radius: 3px; padding: 0 3px; flex-shrink: 0; }
 .job-icon { flex-shrink: 0; font-size: 10px; }
+.job.done { opacity: .7; }
+.job-done { flex-shrink: 0; margin-left: auto; font-weight: 700; }
 .job-text { overflow: hidden; text-overflow: ellipsis; }
 .badge { background: #fff; color: #111; border-radius: 8px; padding: 0 4px; font-size: 10px; flex-shrink: 0; }
 .sched.month .job { font-size: 11px; padding: 1px 4px; }
@@ -172,6 +174,15 @@ tr.clickable:hover { background: #f1f5f9; }
 .job-form > .note-field, .job-form > .actions, .job-form > .job-form-header { grid-column: 1 / -1; }
 .reg-tabs { align-self: start; justify-self: start; }
 .job-form .rate-row { grid-template-columns: 2fr 1fr 1fr; }
+.piece-toggle { display: flex; justify-content: space-between; align-items: center; margin-bottom: -4px; }
+.amount-row { display: grid; gap: 8px; }
+.amount-row.cols-4 { grid-template-columns: repeat(4, 1fr); }
+.amount-row.cols-5 { grid-template-columns: repeat(5, 1fr); }
+.memo-search { grid-template-columns: 2fr 1fr auto auto; }
+.memo-results { max-height: 50vh; }
+.date-cell { display: flex; align-items: center; position: relative; }
+.date-cell .cal-btn { background: none; border: none; padding: 0 2px; font-size: 12px; cursor: pointer; }
+.date-cell .hidden-date { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: none; padding: 0; }
 .job-form .form { gap: 8px; align-content: start; }
 .job-form .boxed { padding: 8px 10px; }
 .job-form input, .job-form select, .job-form textarea { padding: 5px 8px; }
@@ -229,6 +240,14 @@ tr.clickable:hover { background: #f1f5f9; }
 .ledger input.num { width: 96px; padding: 3px 6px; }
 .ledger input.num.short { width: 64px; }
 .ledger input.num.mid { width: 80px; }
+.status-btn { font-size: 11px; padding: 2px 8px; border-radius: 12px; background: #fff; color: var(--muted); border-color: #cbd5e1; white-space: nowrap; }
+.status-btn.on { background: #16a34a; border-color: #16a34a; color: #fff; }
+tr.done-row td { color: #475569; }
+.ledger .note-input { width: 160px; padding: 3px 6px; }
+.piece-cell { display: flex; align-items: center; gap: 4px; margin-top: 2px; }
+.badge.piece { background: #fef3c7; color: #92400e; }
+select.send-送付済み { background: #dcfce7; border-color: #16a34a; }
+select.send-保留 { background: #fef3c7; border-color: #f59e0b; }
 tr.self-row td { background: #f0f9ff; }
 .notice { background: #fffbeb; border: 1px solid #f59e0b; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 13px; display: flex; gap: 12px; align-items: center; justify-content: space-between; }
 .ledger tfoot th { background: #f8fafc; color: var(--text); font-size: 13px; }
@@ -270,6 +289,8 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .doc-lines th { background: #f1f5f9; color: #111; font-size: 9.5pt; border: 1px solid #555; text-align: center; padding: 1.5mm; }
 .doc-lines td { border: 1px solid #555; padding: .5mm 1.5mm; vertical-align: middle; }
 .doc-lines td input { border-bottom: none; }
+.doc-lines textarea.line-text { border: none; resize: none; overflow: hidden; field-sizing: content; min-height: 1.5em; line-height: 1.45; display: block; }
+.doc-lines .line-text-print { white-space: pre-wrap; }
 .doc-lines .c-date { width: 30mm; }
 .doc-lines .c-amt { width: 27mm; }
 .doc-lines .c-del { width: 8mm; border: none; background: none; }
@@ -299,5 +320,6 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   .doc-sheet input, .doc-sheet textarea { border-bottom: none !important; outline: none !important; background: none !important; }
   .print-only { display: inline; }
   span.print-only.amt { display: block; }
+  span.print-only.line-text-print { display: block; padding: 1px 2px; }
   .doc-note textarea { border: none; resize: none; }
 }

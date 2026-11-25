@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
-import type { DB, Job, Memo, RecurRule, SeriesType } from './types'
-import { CARD_COLORS, WEEKDAYS, WEEKDAYS_MON_FIRST, emptyJob, isClosed, ratePay, ratesFor, recurDates, textColorFor, today, uid } from './store'
+import type { DB, Job, Memo, Piece, RecurRule, SeriesType } from './types'
+import { CARD_COLORS, WEEKDAYS, WEEKDAYS_MON_FIRST, emptyJob, isClosed, ratePay, ratesFor, recurDates, repriceForDriver, textColorFor, today, uid, withPiece, yen } from './store'
 
 export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   return (
@@ -108,10 +108,18 @@ export function JobForm({ db, initial, isNew, title, header, defaultType, onSave
   const applyRate = (id: string) => {
     const r = db.rates.find((x) => x.id === id)
     if (!r) return set('rateId', undefined)
-    setJob((j) => ({ ...j, rateId: r.id, clientId: r.clientId ?? j.clientId, billAmount: r.billAmount, payAmount: ratePay(db, r, j.driverId), distance: r.distance ?? j.distance }))
+    setJob((j) => {
+      const base = { ...j, rateId: r.id, clientId: r.clientId ?? j.clientId, distance: r.distance ?? j.distance }
+      // 個配の単価なら数量×単価、それ以外は1件の金額
+      if (r.mode === 'piece') return withPiece({ ...base, piece: { unit: r.unit || '個', qty: j.piece?.qty ?? 0, billUnit: r.billAmount, payUnit: ratePay(db, r, j.driverId) } })
+      return { ...base, piece: undefined, billAmount: r.billAmount, payAmount: ratePay(db, r, j.driverId) }
+    })
   }
   /** 単価適用中に担当者を変えたら、支払先に応じた支払額に更新 */
-  const setDriver = (driverId: string | null) => setJob((j) => ({ ...j, driverId, payAmount: rate ? ratePay(db, rate, driverId) : j.payAmount }))
+  const setDriver = (driverId: string | null) => setJob((j) => repriceForDriver(db, j, driverId))
+  /** 個配の切り替えと入力（数量×単価で金額を自動計算） */
+  const togglePiece = (on: boolean) => setJob((j) => (on ? withPiece({ ...j, piece: { unit: '個', qty: 0, billUnit: 0, payUnit: 0 } }) : { ...j, piece: undefined }))
+  const setPiece = (patch: Partial<Piece>) => setJob((j) => withPiece({ ...j, piece: { ...j.piece!, ...patch } }))
 
   // 繰り返し設定の変更（編集時）。種類だけの変更はラベルの付け替え、それ以外はこの日より後を作り直す
   const ruleChanged = !isNew && (
@@ -182,17 +190,16 @@ export function JobForm({ db, initial, isNew, title, header, defaultType, onSave
           ...db.jobs.map((j) => {
             if (j.id === self.id) return self
             let n = j
-            if (matchesScope(j)) n = { ...n, ...fields }
+            if (matchesScope(j)) {
+              // 個配の数量は日ごとに違うので、範囲変更でも各日の数量は残す
+              n = withPiece({ ...n, ...fields, piece: fields.piece && n.piece ? { ...fields.piece, qty: n.piece.qty } : fields.piece })
+            }
             else if (j.groupId && groups.has(j.groupId)) {
               n = { ...n, ...shared } // 同じ案件の他車両には共通項目のみ反映
               // 単価マスタを新しく選んだら、他の車両にも適用（支払額は各車両の支払先に応じて）
-              if (rate && self.rateId !== original?.rateId) n = { ...n, rateId: rate.id, billAmount: self.billAmount, payAmount: ratePay(db, rate, n.driverId) }
+              if (rate && self.rateId !== original?.rateId) n = repriceForDriver(db, withPiece({ ...n, rateId: rate.id, billAmount: self.billAmount, piece: self.piece && { ...self.piece } }), n.driverId)
             }
-            if (j.id in sibDrivers) {
-              n = { ...n, driverId: sibDrivers[j.id] }
-              const r = db.rates.find((x) => x.id === n.rateId)
-              if (r) n = { ...n, payAmount: ratePay(db, r, n.driverId) }
-            }
+            if (j.id in sibDrivers) n = repriceForDriver(db, n, sibDrivers[j.id])
             return n
           }),
           ...add,
@@ -279,19 +286,47 @@ export function JobForm({ db, initial, isNew, title, header, defaultType, onSave
             <input type="number" min={0} value={job.advance ?? ''} placeholder="高速代など" onChange={(e) => set('advance', e.target.value === '' ? undefined : +e.target.value)} />
           </label>
         </div>
-        <div className="grid3">
-          {isNew && (
-            <label className="field"><span>台数</span>
-              <input type="number" min={1} max={20} value={vehicles} onChange={(e) => setVehicles(Math.min(20, Math.max(1, +e.target.value)))} />
-            </label>
-          )}
-          <label className="field"><span>請求額(円){(isNew ? vehicles > 1 : !!job.groupId) ? ' ※1台あたり' : ''}</span>
-            <input type="number" min={0} value={job.billAmount} onChange={(e) => set('billAmount', +e.target.value)} />
-          </label>
-          <label className="field"><span>支払額(円)</span>
-            <input type="number" min={0} value={job.payAmount} onChange={(e) => set('payAmount', +e.target.value)} />
-          </label>
+        <div className="piece-toggle">
+          <label className="inline small"><input type="checkbox" checked={!!job.piece} onChange={(e) => togglePiece(e.target.checked)} />個配（数量 × 単価で計算）</label>
+          {job.piece && <span className="small muted">請求 {yen(job.billAmount)} ／ 支払 {yen(job.payAmount)}</span>}
         </div>
+        {job.piece ? (
+          <div className={`amount-row cols-${isNew ? 5 : 4}`}>
+            {isNew && (
+              <label className="field"><span>台数</span>
+                <input type="number" min={1} max={20} value={vehicles} onChange={(e) => setVehicles(Math.min(20, Math.max(1, +e.target.value)))} />
+              </label>
+            )}
+            <label className="field"><span>数量</span>
+              <input type="number" min={0} value={job.piece.qty || ''} placeholder="後から入力可" onChange={(e) => setPiece({ qty: +e.target.value })} />
+            </label>
+            <label className="field"><span>単位</span>
+              <select value={job.piece.unit} onChange={(e) => setPiece({ unit: e.target.value })}>
+                {['個', '軒', '件', '口'].map((u) => <option key={u}>{u}</option>)}
+              </select>
+            </label>
+            <label className="field"><span>請求単価</span>
+              <input type="number" min={0} value={job.piece.billUnit} onChange={(e) => setPiece({ billUnit: +e.target.value })} />
+            </label>
+            <label className="field"><span>支払単価</span>
+              <input type="number" min={0} value={job.piece.payUnit} onChange={(e) => setPiece({ payUnit: +e.target.value })} />
+            </label>
+          </div>
+        ) : (
+          <div className="grid3">
+            {isNew && (
+              <label className="field"><span>台数</span>
+                <input type="number" min={1} max={20} value={vehicles} onChange={(e) => setVehicles(Math.min(20, Math.max(1, +e.target.value)))} />
+              </label>
+            )}
+            <label className="field"><span>請求額(円){(isNew ? vehicles > 1 : !!job.groupId) ? ' ※1台あたり' : ''}</span>
+              <input type="number" min={0} value={job.billAmount} onChange={(e) => set('billAmount', +e.target.value)} />
+            </label>
+            <label className="field"><span>支払額(円)</span>
+              <input type="number" min={0} value={job.payAmount} onChange={(e) => set('payAmount', +e.target.value)} />
+            </label>
+          </div>
+        )}
         <div className="field">
           <span>カードの色（「自動」は請求先の色）</span>
           <ColorPicker value={job.color} fallback={clientColor} onChange={(v) => set('color', v)} />

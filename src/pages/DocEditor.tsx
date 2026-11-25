@@ -1,8 +1,8 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import * as XLSX from 'xlsx'
-import { fmtMD, monthDays, payeeOf, routeText, uid, yen } from '../store'
-import type { BillingDoc, DB, DocLine, Job, Settings } from '../types'
+import { monthDays, payeeOf, pieceText, routeText, today, uid, yen } from '../store'
+import type { BillingDoc, DB, DocLine, Job, SendStatus, Settings } from '../types'
 
 /** 帳票の対象となる案件（請求書は請求先ごと、支払明細書は支払先ごと） */
 export function partyJobs(db: DB, month: string, kind: BillingDoc['kind'], partyKey: string) {
@@ -33,25 +33,30 @@ export function buildDoc(db: DB, month: string, kind: BillingDoc['kind'], partyK
   // 会社あての支払明細は、どのドライバーの分か分かるように名前を付ける
   const whoOf = (j: Job) => (kind === 'payment' && partyKey.startsWith('company:') ? ` ／ ${db.drivers.find((d) => d.id === j.driverId)?.displayName ?? ''}` : '')
 
+  const unitOf = (j: Job) => (j.piece ? (kind === 'invoice' ? j.piece.billUnit : j.piece.payUnit) : 0)
+
+  // まとめる単位：繰り返しの案件は同じシリーズ・同じ内容・同じ金額（個配は同じ単価）ごと
   const groups = new Map<string, Job[]>()
   for (const j of jobs) {
-    const key = j.seriesId ? `s:${j.seriesId}:${amountOf(j)}:${whoOf(j)}:${routeText(j)}` : `j:${j.id}`
+    const price = j.piece ? `p${unitOf(j)}${j.piece.unit}` : amountOf(j)
+    const key = j.seriesId ? `s:${j.seriesId}:${price}:${whoOf(j)}:${routeText(j)}` : `j:${j.id}`
     groups.set(key, [...(groups.get(key) ?? []), j])
   }
   const lines: DocLine[] = [...groups.values()].map((g) => {
     const j = g[0]
     const km = g.reduce((s, x) => s + (x.distance ?? 0), 0)
     const advance = g.reduce((s, x) => s + (x.advance ?? 0), 0)
-    if (g.length === 1) {
-      return { date: fmtMD(j.date), text: `${routeText(j)}${km ? `（${km}km）` : ''}${whoOf(j)}`, advance, amount: amountOf(j) }
+    const amount = g.reduce((s, x) => s + amountOf(x), 0)
+    const kmText = km ? `（${g.length > 1 ? '計' : ''}${km.toLocaleString()}km）` : ''
+    const date = g.length === 1 ? md(j.date) : `${md(j.date)}〜${md(g[g.length - 1].date)}`
+    if (j.piece) {
+      const qty = g.reduce((s, x) => s + (x.piece?.qty ?? 0), 0)
+      const worked = g.filter((x) => (x.piece?.qty ?? 0) > 0).length // 数量が入っている日だけ数える
+      const days = g.length > 1 ? `${worked}日 計` : ''
+      return { date, text: `${routeText(j)}　${days}${pieceText({ ...j.piece, qty }, unitOf(j))}${kmText}${whoOf(j)}`, advance, amount }
     }
-    const last = g[g.length - 1]
-    return {
-      date: `${md(j.date)}〜${md(last.date)}`,
-      text: `${routeText(j)}　${g.length}回 × @${amountOf(j).toLocaleString()}${km ? `（計${km.toLocaleString()}km）` : ''}${whoOf(j)}`,
-      advance,
-      amount: amountOf(j) * g.length,
-    }
+    if (g.length === 1) return { date, text: `${routeText(j)}${kmText}${whoOf(j)}`, advance, amount }
+    return { date, text: `${routeText(j)}　${g.length}回 × @${amountOf(j).toLocaleString()}${kmText}${whoOf(j)}`, advance, amount }
   })
   return {
     id: uid(),
@@ -68,6 +73,7 @@ export function buildDoc(db: DB, month: string, kind: BillingDoc['kind'], partyK
     note: kind === 'invoice' ? 'お振込期限：翌月末日\n恐れ入りますが、振込手数料は貴社にてご負担ください。' : 'お支払予定日：翌月末日',
     edited: false,
     sourceTotal: partyTotal(db, month, kind, partyKey),
+    sendStatus: '未送付',
   }
 }
 
@@ -82,6 +88,29 @@ export const docTotals = (doc: BillingDoc, taxRate: number) => {
 }
 
 const TITLE = { invoice: '請求書', payment: '支払明細書' }
+export const SEND_STATUSES: SendStatus[] = ['未送付', '送付済み', '保留']
+
+/** 帳票の日付欄：手入力（自由な書き方）と、📅 からカレンダーで選ぶ、の両方ができる */
+function DateCell({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const picker = useRef<HTMLInputElement>(null)
+  const open = () => {
+    const el = picker.current
+    if (!el) return
+    try {
+      el.showPicker()
+    } catch {
+      el.focus()
+      el.click()
+    }
+  }
+  return (
+    <div className="date-cell">
+      <input value={value} onChange={(e) => onChange(e.target.value)} placeholder="11/2" />
+      <button type="button" className="cal-btn no-print" title="カレンダーから選ぶ" onClick={open}>📅</button>
+      <input ref={picker} type="date" className="hidden-date" tabIndex={-1} onChange={(e) => e.target.value && onChange(md(e.target.value))} />
+    </div>
+  )
+}
 const ymdJa = (s: string) => (s ? `${s.slice(0, 4)}年${+s.slice(5, 7)}月${+s.slice(8, 10)}日` : '')
 
 /**
@@ -141,6 +170,15 @@ export default function DocEditor({ doc, settings, onChange, onRegenerate, onClo
         <button className="ghost" onClick={onClose}>← 閉じる</button>
         <b>{TITLE[doc.kind]}：{doc.toName}</b>
         <span className="spacer" />
+        <label className="inline small">
+          送付状況
+          <select value={doc.sendStatus ?? '未送付'} onChange={(e) => {
+            const v = e.target.value as SendStatus
+            onChange({ ...doc, sendStatus: v, sentAt: v === '送付済み' ? today() : doc.sentAt })
+          }}>
+            {SEND_STATUSES.map((x) => <option key={x}>{x}</option>)}
+          </select>
+        </label>
         <label className="inline small"><input type="checkbox" checked={!!doc.noTax} onChange={(e) => set('noTax', e.target.checked)} />消費税なし</label>
         <button className="ghost" onClick={() => { if (confirm('管理表の内容から作り直しますか？\nこの帳票で編集した内容は消えます。')) onRegenerate() }}>管理表から作り直す</button>
         <button className="secondary" onClick={exportExcel}>Excel出力</button>
@@ -182,8 +220,12 @@ export default function DocEditor({ doc, settings, onChange, onRegenerate, onClo
           <tbody>
             {doc.lines.map((l, i) => (
               <tr key={i}>
-                <td><input value={l.date} onChange={(e) => setLine(i, { date: e.target.value })} /></td>
-                <td><input value={l.text} onChange={(e) => setLine(i, { text: e.target.value })} /></td>
+                <td><DateCell value={l.date} onChange={(v) => setLine(i, { date: v })} /></td>
+                <td>
+                  {/* 長い内容も折り返して全部見えるように（印刷は下の文字で出す） */}
+                  <textarea className="line-text no-print" rows={1} value={l.text} onChange={(e) => setLine(i, { text: e.target.value.replace(/\n/g, ' ') })} />
+                  <span className="print-only line-text-print">{l.text}</span>
+                </td>
                 <td>
                   <input className="amt no-print" type="number" value={l.advance || ''} onChange={(e) => setLine(i, { advance: +e.target.value })} />
                   <span className="print-only amt">{l.advance ? l.advance.toLocaleString() : ''}</span>
@@ -203,7 +245,7 @@ export default function DocEditor({ doc, settings, onChange, onRegenerate, onClo
           <tbody>
             <tr><th>小計（税抜）</th><td>{yen(subtotal)}</td></tr>
             <tr><th>{doc.noTax ? '消費税' : `消費税（${settings.taxRate}%）`}</th><td>{yen(tax)}</td></tr>
-            <tr><th>立替金（税込・非課税）</th><td>{yen(advance)}</td></tr>
+            {advance > 0 && <tr><th>立替金（税込・非課税）</th><td>{yen(advance)}</td></tr>}
             <tr className="grand"><th>合計</th><td>{yen(total)}</td></tr>
           </tbody>
         </table>

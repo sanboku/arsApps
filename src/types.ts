@@ -79,6 +79,18 @@ export interface Job {
   advance?: number
   /** 適用した単価（単価マスタ） */
   rateId?: ID
+  /** 完了（管理表で後日チェック） */
+  done?: boolean
+  /** 個配：数量×単価で金額を決める案件。設定時は billAmount / payAmount を自動計算 */
+  piece?: Piece
+}
+
+/** 個配の数量と単価（例：120個 × 請求@100・支払@80） */
+export interface Piece {
+  unit: string // 個 / 軒 / 件 / 口
+  qty: number
+  billUnit: number
+  payUnit: number
 }
 
 /**
@@ -96,6 +108,9 @@ export interface Rate {
   payByPayee: Record<string, number>
   distance?: number
   note: string
+  /** 'piece' のときは金額が「単価」（個配：数量×単価） */
+  mode?: 'fixed' | 'piece'
+  unit?: string
 }
 
 /** 帳票（請求書 / 支払明細書）。締め後に管理表から作成し、自由に編集できる */
@@ -123,7 +138,12 @@ export interface BillingDoc {
   noTax?: boolean
   /** 作成時の管理表の合計（金額＋立替金）。管理表がその後変わったかの判定に使う */
   sourceTotal?: number
+  /** 送付状況 */
+  sendStatus?: SendStatus
+  sentAt?: string
 }
+
+export type SendStatus = '未送付' | '送付済み' | '保留'
 
 /** 自社情報（帳票の発行元） */
 export interface Settings {
