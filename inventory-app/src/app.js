@@ -15,6 +15,11 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
+function bearerToken(header) {
+  const m = /^Bearer\s+(\S+)$/i.exec(header || '');
+  return m ? m[1] : null;
+}
+
 function sendJson(res, status, data) {
   const body = JSON.stringify(data);
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
@@ -84,7 +89,8 @@ function createHandler(db) {
         return serveStatic(res, url.pathname);
       }
       const body = ['POST', 'PUT'].includes(req.method) ? await readBody(req) : {};
-      const { status, data } = await dispatch(db, req.method, url.pathname, url.searchParams, body);
+      const token = bearerToken(req.headers.authorization);
+      const { status, data } = await dispatch(db, req.method, url.pathname, url.searchParams, body, token);
       return sendJson(res, status, data);
     } catch (err) {
       if (err instanceof HttpError) return sendJson(res, err.status, { error: err.message });

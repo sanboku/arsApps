@@ -46,7 +46,9 @@ window.fetch = async function localFetch(input, init = {}) {
   try {
     const body = init.body ? JSON.parse(init.body) : {};
     const db = await getDb();
-    const { status, data } = await dispatch(db, method, url.pathname, url.searchParams, body);
+    const headers = new Headers(init.headers || {});
+    const m = /^Bearer\s+(\S+)$/i.exec(headers.get('Authorization') || '');
+    const { status, data } = await dispatch(db, method, url.pathname, url.searchParams, body, m ? m[1] : null);
     return json(status, data);
   } catch (err) {
     if (err instanceof HttpError) return json(err.status, { error: err.message });

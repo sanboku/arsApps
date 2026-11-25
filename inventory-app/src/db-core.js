@@ -94,6 +94,23 @@ CREATE TABLE IF NOT EXISTS invoice_lines (
   unit_price INTEGER NOT NULL CHECK (unit_price >= 0),
   amount     INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS employees (
+  id           INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  code         TEXT NOT NULL UNIQUE,
+  name         TEXT NOT NULL,
+  role         TEXT NOT NULL CHECK (role IN ('admin','staff')),
+  active       BOOLEAN NOT NULL DEFAULT TRUE,
+  pin_hash     TEXT NOT NULL,
+  failed_count INTEGER NOT NULL DEFAULT 0,
+  locked_until TEXT,
+  created_at   TEXT NOT NULL DEFAULT (${NOW_SQL})
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash  TEXT PRIMARY KEY,
+  employee_id INTEGER NOT NULL REFERENCES employees(id),
+  expires_at  TEXT NOT NULL
+);
 `;
 
 

@@ -11,8 +11,14 @@ const KIND_LABEL = {
 };
 const STATUS_LABEL = { draft: '下書き', issued: '発行済', paid: '入金済', void: '取消' };
 
+const TOKEN_KEY = 'inventory-token';
+const readToken = () => { try { return localStorage.getItem(TOKEN_KEY); } catch { return null; } };
+const writeToken = (t) => { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch { /* 保存できない環境 */ } };
+
 async function api(method, path, body) {
   const opts = { method, headers: {} };
+  const token = readToken();
+  if (token) opts.headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(body);
@@ -20,9 +26,89 @@ async function api(method, path, body) {
   const res = await fetch(path, opts);
   let data = null;
   try { data = await res.json(); } catch { /* 空レスポンス */ }
-  if (!res.ok) throw new Error((data && data.error) || `通信エラー (${res.status})`);
+  if (!res.ok) {
+    const err = new Error((data && data.error) || `通信エラー (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
+
+/* ---------- ログイン状態 ---------- */
+let currentUser = null;
+const isAdmin = () => !!currentUser && currentUser.role === 'admin';
+
+async function checkSession() {
+  if (!readToken()) return false;
+  try {
+    currentUser = await api('GET', '/api/auth/me');
+    return true;
+  } catch {
+    currentUser = null;
+    return false;
+  }
+}
+
+function renderUserBar() {
+  const bar = $('#user-bar');
+  bar.hidden = !currentUser;
+  if (currentUser) {
+    $('#user-name').textContent = `${currentUser.name}(${currentUser.code} / ${currentUser.role === 'admin' ? '管理者' : '一般'})`;
+  }
+}
+
+/** 初回は管理者の作成、2回目以降はログイン画面 */
+async function renderAuth(view) {
+  const st = await api('GET', '/api/auth/status');
+  const setup = !st.initialized;
+  renderUserBar();
+  view.innerHTML = `
+    <section class="card auth-card">
+      <h2>${setup ? '初期設定(管理者の作成)' : 'ログイン'}</h2>
+      ${setup ? '<p class="muted">最初の管理者アカウントを作成します。作成後はそのままログインされます。</p>' : ''}
+      <form id="auth-form">
+        <label>従業員ID<input name="code" autocomplete="username" autocapitalize="characters" required maxlength="20"></label>
+        ${setup ? '<label>氏名<input name="name" autocomplete="name" required maxlength="50"></label>' : ''}
+        <label>PIN(4〜6桁)<input name="pin" type="password" inputmode="numeric" pattern="\\d{4,6}" autocomplete="current-password" required maxlength="6"></label>
+        <button type="submit" class="block">${setup ? '管理者を作成' : 'ログイン'}</button>
+      </form>
+    </section>`;
+  $('#auth-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target));
+    try {
+      const r = await api('POST', setup ? '/api/auth/setup' : '/api/auth/login', fd);
+      writeToken(r.token);
+      currentUser = r.employee;
+      toast(`${currentUser.name} さん、ようこそ`);
+      route();
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
+$('#logout-btn').addEventListener('click', async () => {
+  try { await api('POST', '/api/auth/logout', {}); } catch { /* 失効済みでも続行 */ }
+  writeToken(null);
+  currentUser = null;
+  route();
+});
+
+$('#pin-btn').addEventListener('click', () => {
+  const dlg = $('#pin-dialog');
+  $('#pin-form').reset();
+  dlg.showModal();
+});
+$('#pin-cancel').addEventListener('click', () => $('#pin-dialog').close());
+$('#pin-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = Object.fromEntries(new FormData(e.target));
+  if (fd.new_pin !== fd.confirm_pin) return toast('新しいPINが一致しません', true);
+  try {
+    await api('POST', '/api/auth/pin', { current_pin: fd.current_pin, new_pin: fd.new_pin });
+    $('#pin-dialog').close();
+    toast('PINを変更しました');
+  } catch (err) { toast(err.message, true); }
+});
 
 let toastTimer;
 function toast(message, isError = false) {
@@ -45,7 +131,7 @@ const todayISO = () => {
 };
 
 /* ---------- マスタのキャッシュ ---------- */
-const masters = { locations: [], products: [], customers: [] };
+const masters = { locations: [], products: [], customers: [], employees: [] };
 const activeOnly = (list) => list.filter((x) => x.active);
 
 async function loadMasters() {
@@ -54,6 +140,7 @@ async function loadMasters() {
     api('GET', '/api/products?all=1'),
     api('GET', '/api/customers?all=1'),
   ]);
+  masters.employees = isAdmin() ? await api('GET', '/api/employees') : [];
 }
 
 function options(list, selected, label, placeholder) {
@@ -490,6 +577,16 @@ async function openInvoiceDialog(id) {
 
 /* ---------- マスタ ---------- */
 const MASTER_DEFS = {
+  employees: {
+    title: '従業員', endpoint: '/api/employees', items: () => masters.employees, adminOnly: true,
+    columns: [['code', '従業員ID'], ['name', '氏名'], ['role', '権限', (v) => (v === 'admin' ? '管理者' : '一般')]],
+    fields: [
+      { name: 'code', label: '従業員ID(英数字)', required: true, max: 20, lockOnEdit: true },
+      { name: 'name', label: '氏名', required: true, max: 50 },
+      { name: 'role', label: '権限', select: [['staff', '一般'], ['admin', '管理者']] },
+      { name: 'pin', label: 'PIN(4〜6桁)', type: 'password', inputmode: 'numeric', max: 6, requiredOnCreate: true, hint: '編集時は空欄なら変更しません' },
+    ],
+  },
   locations: {
     title: '拠点', endpoint: '/api/locations', items: () => masters.locations,
     columns: [['code', 'コード'], ['name', '拠点名'], ['address', '住所']],
@@ -539,10 +636,21 @@ function renderMasterSection(key) {
       <h3>${editing ? `${def.title}を編集: ${esc(editing[def.columns[0][0]])}` : `${def.title}を新規登録`}</h3>
       <form data-form="${key}">
         <div class="grid">
-          ${def.fields.map((f) => `<label>${f.label}
-            <input name="${f.name}" type="${f.type || 'text'}" ${f.type === 'number' ? 'min="0" step="1"' : ''}
-              ${f.required ? 'required' : ''} ${f.max ? `maxlength="${f.max}"` : ''} ${f.placeholder ? `placeholder="${f.placeholder}"` : ''}
-              value="${esc(editing ? editing[f.name] : '')}"></label>`).join('')}
+          ${def.fields.map((f) => {
+            const required = f.required || (f.requiredOnCreate && !editing);
+            const disabled = f.lockOnEdit && editing ? 'disabled' : '';
+            if (f.select) {
+              return `<label>${f.label}
+                <select name="${f.name}" ${disabled}>${f.select.map(([v, l]) =>
+                  `<option value="${v}"${editing && String(editing[f.name]) === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`;
+            }
+            const value = f.type === 'password' ? '' : esc(editing ? editing[f.name] : '');
+            return `<label>${f.label}
+              <input name="${f.name}" type="${f.type || 'text'}" ${f.type === 'number' ? 'min="0" step="1"' : ''}
+                ${f.inputmode ? `inputmode="${f.inputmode}"` : ''} ${required ? 'required' : ''} ${disabled}
+                ${f.max ? `maxlength="${f.max}"` : ''} ${f.placeholder ? `placeholder="${f.placeholder}"` : ''}
+                value="${value}">${f.hint ? `<span class="muted">${esc(f.hint)}</span>` : ''}</label>`;
+          }).join('')}
           ${editing ? `<label class="row" style="flex-direction:row;align-items:center;color:var(--text)"><input type="checkbox" name="active" ${editing.active ? 'checked' : ''}> 有効</label>` : ''}
         </div>
         <div class="row" style="margin-top:12px">
@@ -555,7 +663,8 @@ function renderMasterSection(key) {
 }
 
 async function renderMasters(view) {
-  view.innerHTML = Object.keys(MASTER_DEFS).map(renderMasterSection).join('');
+  const keys = Object.keys(MASTER_DEFS).filter((k) => !MASTER_DEFS[k].adminOnly || isAdmin());
+  view.innerHTML = keys.map(renderMasterSection).join('');
   view.querySelectorAll('[data-master]').forEach((section) => {
     const key = section.dataset.master;
     const def = MASTER_DEFS[key];
@@ -574,7 +683,11 @@ async function renderMasters(view) {
       e.preventDefault();
       const form = e.target;
       const body = {};
-      for (const f of def.fields) body[f.name] = form.elements[f.name].value;
+      for (const f of def.fields) {
+        const value = form.elements[f.name].value;
+        if (f.type === 'password' && !value) continue; // 編集時の空欄は変更なし
+        body[f.name] = value;
+      }
       if (form.elements.active) body.active = form.elements.active.checked;
       const id = masterEditing[key];
       try {
@@ -593,19 +706,31 @@ const TABS = { stock: renderStock, transfers: renderTransfers, invoices: renderI
 let navToken = 0;
 
 async function route() {
-  const name = location.hash.replace('#', '') || 'stock';
-  const render = TABS[name] || renderStock;
-  if (name !== 'invoices') { invUI.mode = 'list'; invUI.draft = null; }
-  document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('active', a.dataset.tab === name));
   const token = ++navToken;
   const view = $('#view');
   view.innerHTML = '<p class="muted">読み込み中…</p>';
   try {
+    if (!currentUser && !(await checkSession())) {
+      if (token === navToken) await renderAuth(view);
+      return;
+    }
+    renderUserBar();
+    const name = location.hash.replace('#', '') || 'stock';
+    const render = TABS[name] || renderStock;
+    if (name !== 'invoices') { invUI.mode = 'list'; invUI.draft = null; }
+    document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('active', a.dataset.tab === name));
     await loadMasters();
     if (token !== navToken) return;
     await render(view);
   } catch (err) {
-    if (token === navToken) view.innerHTML = `<section class="card"><p class="neg">エラー: ${esc(err.message)}</p></section>`;
+    if (token !== navToken) return;
+    if (err.status === 401) {
+      // ログインの期限切れ
+      writeToken(null);
+      currentUser = null;
+      return route();
+    }
+    view.innerHTML = `<section class="card"><p class="neg">エラー: ${esc(err.message)}</p></section>`;
   }
 }
 
@@ -616,6 +741,8 @@ if (resetBtn) {
     if (!confirm('ブラウザ内のデータをすべて消して作り直します。よろしいですか?')) return;
     try {
       await window.inventoryLocalReset();
+      writeToken(null);
+      currentUser = null;
       toast('データを初期化しました');
       route();
     } catch (err) { toast(err.message, true); }

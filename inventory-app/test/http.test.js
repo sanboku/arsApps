@@ -8,12 +8,19 @@ const { createServer } = require('../src/server');
 let server;
 let db;
 let base;
+let token;
 
 before(async () => {
   db = await openDatabase({ memory: true });
   server = createServer(db);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
+  const setup = await fetch(base + '/api/auth/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: 'ADM01', name: '管理者', pin: '1234' }),
+  });
+  token = (await setup.json()).token;
 });
 
 after(async () => {
@@ -21,12 +28,11 @@ after(async () => {
   await db.close();
 });
 
-const call = async (method, path, body) => {
-  const res = await fetch(base + path, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
+const call = async (method, path, body, auth = true) => {
+  const headers = {};
+  if (body) headers['Content-Type'] = 'application/json';
+  if (auth) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(base + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
   return { status: res.status, body: await res.json() };
 };
 
@@ -62,6 +68,10 @@ test('API で拠点・品目を作り、請求書と移動の一連の流れが�
 
   const del = await call('DELETE', `/api/invoices/${draft.body.id}`);
   assert.deepEqual(del.body, { ok: true });
+});
+
+test('ログインしていない API 呼び出しは 401', async () => {
+  assert.equal((await call('GET', '/api/stock', undefined, false)).status, 401);
 });
 
 test('不正な入力・存在しないIDは適切なステータスを返す', async () => {
