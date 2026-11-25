@@ -1,16 +1,20 @@
 {
   "name": "inventory-app",
   "version": "0.1.0",
-  "description": "複数拠点の在庫管理・サンプル管理・請求書作成の簡易アプリ",
+  "description": "複数拠点の在庫管理・サンプル管理・請求書作成の簡易アプリ(Vercel + PostgreSQL 対応)",
   "private": true,
   "main": "src/server.js",
   "engines": {
-    "node": ">=22.13"
+    "node": ">=20"
   },
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "test": "node --test --no-warnings test/*.test.js"
   },
-  "license": "UNLICENSED"
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@electric-sql/pglite": "^0.6.0",
+    "pg": "^8.23.1"
+  }
 }

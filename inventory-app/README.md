@@ -1,16 +1,32 @@
 # 在庫管理アプリ (inventory-app)
 
 複数拠点の在庫管理、拠点間移動、サンプル品の払出・返却、請求書作成を行う簡易アプリです。
-外部依存パッケージはなく、Node.js 22.13 以上の組み込み機能 (`node:sqlite`, `node:http`) だけで動きます。
+データは PostgreSQL に保存します (ローカルは PGlite、本番は Neon などの外部DB)。
 
 ## 起動
 
+Node.js 20 以上が必要です。
+
 ```bash
-npm start              # http://localhost:3000
-PORT=8080 npm start    # ポート変更
-DB_PATH=/path/to/x.db npm start   # DB の場所 (既定: data/inventory.db)
+npm install
+npm run dev            # 開発: ファイルを保存すると自動で再起動 (http://localhost:3000)
+npm start              # 通常起動
 npm test               # 自動テスト
 ```
+
+データベースの指定:
+
+- `DATABASE_URL` を指定しない場合、ローカルの PostgreSQL 互換DB (PGlite) を `data/pgdata` に保存します。インストール不要で、すぐ動きます。
+- `DATABASE_URL` に PostgreSQL の接続文字列 (Neon など) を指定すると、そのDBを使います。
+
+## デプロイ (Vercel + 外部 PostgreSQL)
+
+1. 外部DB (Neon など) を作成し、接続文字列 (`postgresql://...`) を取得します。
+2. Vercel でこのリポジトリを取り込みます。**Root Directory は `inventory-app`** を指定します。
+3. Vercel の Environment Variables に `DATABASE_URL` を登録します。
+4. デプロイします。テーブルはアプリの初回アクセス時に自動で作成されます。
+
+画面は `public/` の静的ファイル、API は `api/[...route].js` (Vercel の関数) で動きます。
 
 ## 機能
 
@@ -53,10 +69,12 @@ npm test               # 自動テスト
 ## 構成
 
 ```
+api/
+  [...route].js  Vercel 用の API 入口
 src/
   server.js     エントリポイント
   app.js        ルーティングと静的ファイル配信
-  db.js         SQLite のスキーマとトランザクション
+  db.js         PostgreSQL のスキーマ・接続 (本番 / ローカル PGlite)
   stock.js      在庫台帳 (残高・増減・入庫調整)
   transfers.js  拠点間移動・サンプル払出/返却
   invoices.js   請求書 (下書き・発行・取消・採番・税計算)

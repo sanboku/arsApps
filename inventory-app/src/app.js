@@ -23,7 +23,7 @@ const MIME = {
  */
 function buildRoutes() {
   const r = [];
-  const add = (method, pattern, handler, status = 200) => r.push({ method, pattern, handler, status });
+  const add = (method, pattern, handler, status = 200) => r.push({ method, pattern, handler: async (db, c) => handler(db, c), status });
 
   // 拠点
   add('GET', /^\/api\/locations$/, (db, c) => masters.listLocations(db, { includeInactive: c.query.get('all') === '1' }));
@@ -41,23 +41,23 @@ function buildRoutes() {
   add('PUT', /^\/api\/customers\/(\d+)$/, (db, c) => masters.saveCustomer(db, c.body, Number(c.params[0])));
 
   // 在庫
-  add('GET', /^\/api\/stock$/, (db) => ({
-    locations: masters.listLocations(db),
-    products: masters.listProducts(db),
-    customers: masters.listCustomers(db),
-    balances: stock.allBalances(db),
-    sample_loans: transfers.sampleLoans(db),
+  add('GET', /^\/api\/stock$/, async (db) => ({
+    locations: await masters.listLocations(db),
+    products: await masters.listProducts(db),
+    customers: await masters.listCustomers(db),
+    balances: await stock.allBalances(db),
+    sample_loans: await transfers.sampleLoans(db),
   }));
   add('POST', /^\/api\/stock\/adjustments$/, (db, c) => stock.adjust(db, c.body), 201);
   add('GET', /^\/api\/movements$/, (db) =>
-    db.prepare(
+    db.all(
       `SELECT m.*, p.sku, p.name AS product_name, l.name AS location_name, c.name AS customer_name
          FROM stock_movements m
          JOIN products p ON p.id = m.product_id
          LEFT JOIN locations l ON l.id = m.location_id
          LEFT JOIN customers c ON c.id = m.customer_id
         ORDER BY m.id DESC LIMIT 200`
-    ).all()
+    )
   );
 
   // 在庫移動・サンプル
@@ -68,10 +68,10 @@ function buildRoutes() {
   // 請求書
   add('GET', /^\/api\/invoices$/, (db, c) => invoices.listInvoices(db, { status: c.query.get('status') }));
   add('POST', /^\/api\/invoices$/, (db, c) => invoices.createDraft(db, c.body), 201);
-  add('GET', /^\/api\/invoices\/(\d+)$/, (db, c) => invoices.getInvoice(db, c.params[0]) || notFoundInvoice());
+  add('GET', /^\/api\/invoices\/(\d+)$/, async (db, c) => (await invoices.getInvoice(db, c.params[0])) || notFoundInvoice());
   add('PUT', /^\/api\/invoices\/(\d+)$/, (db, c) => invoices.updateDraft(db, c.params[0], c.body));
-  add('DELETE', /^\/api\/invoices\/(\d+)$/, (db, c) => {
-    invoices.deleteDraft(db, c.params[0]);
+  add('DELETE', /^\/api\/invoices\/(\d+)$/, async (db, c) => {
+    await invoices.deleteDraft(db, c.params[0]);
     return { ok: true };
   });
   add('POST', /^\/api\/invoices\/(\d+)\/issue$/, (db, c) => invoices.issue(db, c.params[0]));
@@ -94,6 +94,14 @@ function sendJson(res, status, data) {
 }
 
 function readBody(req) {
+  // Vercel など、フレームワークが本文を解析済みの場合はそれを使う
+  if (req.body !== undefined) {
+    if (typeof req.body === 'string') {
+      try { return Promise.resolve(req.body ? JSON.parse(req.body) : {}); } catch { return Promise.reject(new HttpError(400, 'JSONの形式が不正です')); }
+    }
+    return Promise.resolve(req.body && typeof req.body === 'object' ? req.body : {});
+  }
+  if (req.readableEnded) return Promise.resolve({});
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
@@ -155,7 +163,7 @@ function createHandler(db) {
 
       const params = url.pathname.match(route.pattern).slice(1);
       const body = ['POST', 'PUT'].includes(req.method) ? await readBody(req) : {};
-      const data = route.handler(db, { params, body, query: url.searchParams });
+      const data = await route.handler(db, { params, body, query: url.searchParams });
       return sendJson(res, route.status, data);
     } catch (err) {
       if (err instanceof HttpError) return sendJson(res, err.status, { error: err.message });

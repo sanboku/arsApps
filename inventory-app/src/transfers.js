@@ -1,7 +1,6 @@
 'use strict';
 
 const { badRequest } = require('./errors');
-const { transaction } = require('./db');
 const masters = require('./masters');
 const stock = require('./stock');
 const v = require('./validate');
@@ -13,7 +12,7 @@ const KINDS = {
 };
 
 /** 同一品目の行をまとめ、品目情報を付与する */
-function normalizeLines(db, rawLines) {
+async function normalizeLines(db, rawLines) {
   if (!Array.isArray(rawLines) || rawLines.length === 0) throw badRequest('明細を1行以上入力してください');
   const totals = new Map();
   for (const line of rawLines) {
@@ -21,15 +20,19 @@ function normalizeLines(db, rawLines) {
     const qty = v.positiveInt(line.qty, '数量');
     totals.set(productId, (totals.get(productId) || 0) + qty);
   }
-  return [...totals].map(([productId, qty]) => ({ product: masters.findProduct(db, productId), qty }));
+  const result = [];
+  for (const [productId, qty] of totals) {
+    result.push({ product: await masters.findProduct(db, productId), qty });
+  }
+  return result;
 }
 
-function locationOf(db, value, label) {
-  return masters.requireRow(db, 'locations', v.id(value, label), label).id;
+async function locationOf(db, value, label) {
+  return (await masters.requireRow(db, 'locations', v.id(value, label), label)).id;
 }
 
-function customerOf(db, value) {
-  return masters.requireRow(db, 'customers', v.id(value, '取引先'), '取引先').id;
+async function customerOf(db, value) {
+  return (await masters.requireRow(db, 'customers', v.id(value, '取引先'), '取引先')).id;
 }
 
 /**
@@ -39,7 +42,7 @@ function customerOf(db, value) {
  *  - sample_return: お客様 → 拠点(サンプル戻し)
  * 減る側の保持数が足りない場合は 409 で全体を取り消す。
  */
-function createTransfer(db, input) {
+async function createTransfer(db, input) {
   const kind = input.kind;
   if (!KINDS[kind]) throw badRequest('操作種別が不正です');
   const note = v.text(input.note, '備考', { max: 500 });
@@ -51,35 +54,34 @@ function createTransfer(db, input) {
   let destination;
 
   if (kind === 'transfer') {
-    fromLocation = locationOf(db, input.from_location_id, '移動元拠点');
-    toLocation = locationOf(db, input.to_location_id, '移動先拠点');
+    fromLocation = await locationOf(db, input.from_location_id, '移動元拠点');
+    toLocation = await locationOf(db, input.to_location_id, '移動先拠点');
     if (fromLocation === toLocation) throw badRequest('移動元と移動先が同じ拠点です');
     source = { locationId: fromLocation };
     destination = { locationId: toLocation };
   } else if (kind === 'sample_out') {
-    fromLocation = locationOf(db, input.from_location_id, '払出元拠点');
-    customer = customerOf(db, input.customer_id);
+    fromLocation = await locationOf(db, input.from_location_id, '払出元拠点');
+    customer = await customerOf(db, input.customer_id);
     source = { locationId: fromLocation };
     destination = { customerId: customer };
   } else {
-    customer = customerOf(db, input.customer_id);
-    toLocation = locationOf(db, input.to_location_id, '返却先拠点');
+    customer = await customerOf(db, input.customer_id);
+    toLocation = await locationOf(db, input.to_location_id, '返却先拠点');
     source = { customerId: customer };
     destination = { locationId: toLocation };
   }
 
-  const lines = normalizeLines(db, input.lines);
+  const lines = await normalizeLines(db, input.lines);
 
-  return transaction(db, () => {
-    const info = db
-      .prepare(
-        'INSERT INTO transfers (kind, from_location_id, to_location_id, customer_id, note) VALUES (?, ?, ?, ?, ?)'
-      )
-      .run(kind, fromLocation, toLocation, customer, note);
-    const transferId = Number(info.lastInsertRowid);
+  return db.tx(async (t) => {
+    const header = await t.get(
+      'INSERT INTO transfers (kind, from_location_id, to_location_id, customer_id, note) VALUES (?, ?, ?, ?, ?) RETURNING id',
+      [kind, fromLocation, toLocation, customer, note]
+    );
+    const transferId = header.id;
 
     for (const { product, qty } of lines) {
-      stock.take(db, {
+      await stock.take(t, {
         productId: product.id,
         productLabel: `${product.sku} ${product.name}`,
         holder: source,
@@ -89,7 +91,7 @@ function createTransfer(db, input) {
         refId: transferId,
         note,
       });
-      stock.give(db, {
+      await stock.give(t, {
         productId: product.id,
         holder: destination,
         qty,
@@ -98,57 +100,55 @@ function createTransfer(db, input) {
         refId: transferId,
         note,
       });
-      db.prepare('INSERT INTO transfer_lines (transfer_id, product_id, qty) VALUES (?, ?, ?)').run(
-        transferId, product.id, qty
-      );
+      await t.run('INSERT INTO transfer_lines (transfer_id, product_id, qty) VALUES (?, ?, ?)', [
+        transferId, product.id, qty,
+      ]);
     }
-    return getTransfer(db, transferId);
+    return getTransfer(t, transferId);
   });
 }
 
-function getTransfer(db, id) {
-  const header = db
-    .prepare(
-      `SELECT t.*, fl.name AS from_location_name, tl.name AS to_location_name, c.name AS customer_name
-         FROM transfers t
-         LEFT JOIN locations fl ON fl.id = t.from_location_id
-         LEFT JOIN locations tl ON tl.id = t.to_location_id
-         LEFT JOIN customers c ON c.id = t.customer_id
-        WHERE t.id = ?`
-    )
-    .get(id);
+async function getTransfer(db, id) {
+  const header = await db.get(
+    `SELECT t.*, fl.name AS from_location_name, tl.name AS to_location_name, c.name AS customer_name
+       FROM transfers t
+       LEFT JOIN locations fl ON fl.id = t.from_location_id
+       LEFT JOIN locations tl ON tl.id = t.to_location_id
+       LEFT JOIN customers c ON c.id = t.customer_id
+      WHERE t.id = ?`,
+    [id]
+  );
   if (!header) return null;
-  header.lines = db
-    .prepare(
-      `SELECT tl.product_id, tl.qty, p.sku, p.name, p.unit
-         FROM transfer_lines tl JOIN products p ON p.id = tl.product_id
-        WHERE tl.transfer_id = ? ORDER BY tl.id`
-    )
-    .all(id);
+  header.lines = await db.all(
+    `SELECT tl.product_id, tl.qty, p.sku, p.name, p.unit
+       FROM transfer_lines tl JOIN products p ON p.id = tl.product_id
+      WHERE tl.transfer_id = ? ORDER BY tl.id`,
+    [id]
+  );
   header.kind_label = KINDS[header.kind];
   return header;
 }
 
-function listTransfers(db, limit = 100) {
-  const ids = db.prepare('SELECT id FROM transfers ORDER BY id DESC LIMIT ?').all(limit);
-  return ids.map((r) => getTransfer(db, r.id));
+async function listTransfers(db, limit = 100) {
+  const ids = await db.all('SELECT id FROM transfers ORDER BY id DESC LIMIT ?', [limit]);
+  const result = [];
+  for (const r of ids) result.push(await getTransfer(db, r.id));
+  return result;
 }
 
 /** お客様ごとのサンプル貸出残 */
 function sampleLoans(db) {
-  return db
-    .prepare(
-      `SELECT c.id AS customer_id, c.name AS customer_name, p.id AS product_id,
-              p.sku, p.name AS product_name, p.unit, SUM(m.qty) AS qty
-         FROM stock_movements m
-         JOIN customers c ON c.id = m.customer_id
-         JOIN products p ON p.id = m.product_id
-        WHERE m.customer_id IS NOT NULL
-        GROUP BY c.id, p.id
-       HAVING SUM(m.qty) <> 0
-        ORDER BY c.name, p.sku`
-    )
-    .all();
+  return db.all(
+    `SELECT c.id AS customer_id, c.name AS customer_name, p.id AS product_id,
+            p.sku, p.name AS product_name, p.unit, SUM(m.qty)::int AS qty
+       FROM stock_movements m
+       JOIN customers c ON c.id = m.customer_id
+       JOIN products p ON p.id = m.product_id
+      WHERE m.customer_id IS NOT NULL
+      GROUP BY c.id, p.id
+     HAVING SUM(m.qty) <> 0
+      ORDER BY c.name, p.sku`
+  );
 }
 
 module.exports = { KINDS, createTransfer, getTransfer, listTransfers, sampleLoans };

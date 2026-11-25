@@ -2,41 +2,43 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
+
+/** 日本時間の現在時刻(YYYY-MM-DD HH:MM:SS)。SQL 文の中で使う */
+const NOW_SQL = `to_char(now() AT TIME ZONE 'Asia/Tokyo', 'YYYY-MM-DD HH24:MI:SS')`;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS locations (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   code       TEXT NOT NULL UNIQUE,
   name       TEXT NOT NULL,
   address    TEXT NOT NULL DEFAULT '',
-  active     INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+  active     BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TEXT NOT NULL DEFAULT (${NOW_SQL})
 );
 
 CREATE TABLE IF NOT EXISTS products (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   sku        TEXT NOT NULL UNIQUE,
   name       TEXT NOT NULL,
   unit       TEXT NOT NULL DEFAULT '個',
   unit_price INTEGER NOT NULL DEFAULT 0 CHECK (unit_price >= 0),
-  active     INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+  active     BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TEXT NOT NULL DEFAULT (${NOW_SQL})
 );
 
 CREATE TABLE IF NOT EXISTS customers (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name       TEXT NOT NULL,
   address    TEXT NOT NULL DEFAULT '',
   email      TEXT NOT NULL DEFAULT '',
-  active     INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+  active     BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TEXT NOT NULL DEFAULT (${NOW_SQL})
 );
 
 -- 在庫台帳。在庫数は「拠点 or 取引先(サンプル保有)」ごとの SUM(qty) で求める。
 -- 数量の移動は必ず2行(減る側 / 増える側)で記録し、全体の合計が変わらないようにする。
 CREATE TABLE IF NOT EXISTS stock_movements (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   product_id  INTEGER NOT NULL REFERENCES products(id),
   location_id INTEGER REFERENCES locations(id),
   customer_id INTEGER REFERENCES customers(id),
@@ -45,31 +47,31 @@ CREATE TABLE IF NOT EXISTS stock_movements (
   ref_type    TEXT,
   ref_id      INTEGER,
   note        TEXT NOT NULL DEFAULT '',
-  created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+  created_at  TEXT NOT NULL DEFAULT (${NOW_SQL}),
   CHECK ((location_id IS NULL) <> (customer_id IS NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_movements_location ON stock_movements(product_id, location_id);
 CREATE INDEX IF NOT EXISTS idx_movements_customer ON stock_movements(product_id, customer_id);
 
 CREATE TABLE IF NOT EXISTS transfers (
-  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  id               INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   kind             TEXT NOT NULL CHECK (kind IN ('transfer','sample_out','sample_return')),
   from_location_id INTEGER REFERENCES locations(id),
   to_location_id   INTEGER REFERENCES locations(id),
   customer_id      INTEGER REFERENCES customers(id),
   note             TEXT NOT NULL DEFAULT '',
-  created_at       TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+  created_at       TEXT NOT NULL DEFAULT (${NOW_SQL})
 );
 
 CREATE TABLE IF NOT EXISTS transfer_lines (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   transfer_id INTEGER NOT NULL REFERENCES transfers(id),
   product_id  INTEGER NOT NULL REFERENCES products(id),
   qty         INTEGER NOT NULL CHECK (qty > 0)
 );
 
 CREATE TABLE IF NOT EXISTS invoices (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   number      TEXT UNIQUE,
   status      TEXT NOT NULL CHECK (status IN ('draft','issued','paid','void')),
   customer_id INTEGER NOT NULL REFERENCES customers(id),
@@ -81,12 +83,12 @@ CREATE TABLE IF NOT EXISTS invoices (
   tax         INTEGER NOT NULL DEFAULT 0,
   total       INTEGER NOT NULL DEFAULT 0,
   paid_at     TEXT,
-  created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-  updated_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+  created_at  TEXT NOT NULL DEFAULT (${NOW_SQL}),
+  updated_at  TEXT NOT NULL DEFAULT (${NOW_SQL})
 );
 
 CREATE TABLE IF NOT EXISTS invoice_lines (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   invoice_id INTEGER NOT NULL REFERENCES invoices(id),
   product_id INTEGER NOT NULL REFERENCES products(id),
   qty        INTEGER NOT NULL CHECK (qty > 0),
@@ -95,30 +97,79 @@ CREATE TABLE IF NOT EXISTS invoice_lines (
 );
 `;
 
+/** `?` を PostgreSQL の $1, $2 ... に順番に置き換える */
+function toPgParams(sql) {
+  let i = 0;
+  return sql.replace(/\?/g, () => `$${++i}`);
+}
+
+/** pg と PGlite で共通に使う操作の組み立て。query は (sql, params) を受ける関数 */
+function makeApi({ query, exec }) {
+  const api = {
+    async all(sql, params = []) {
+      return (await query(toPgParams(sql), params)).rows;
+    },
+    async get(sql, params = []) {
+      return (await api.all(sql, params))[0];
+    },
+    async run(sql, params = []) {
+      await query(toPgParams(sql), params);
+    },
+    exec,
+  };
+  return api;
+}
+
+async function openPg(url) {
+  const { Pool } = require('pg');
+  // サーバーレス(Vercel)では接続を1本に絞る
+  const pool = new Pool({ connectionString: url, max: process.env.VERCEL ? 1 : 5 });
+  return {
+    ...makeApi({ query: (sql, params) => pool.query(sql, params), exec: (sql) => pool.query(sql) }),
+    async tx(fn) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const result = await fn(makeApi({ query: (s, p) => client.query(s, p), exec: (s) => client.query(s) }));
+        await client.query('COMMIT');
+        return result;
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+    },
+    close: () => pool.end(),
+  };
+}
+
+async function openPglite(dataDir) {
+  const { PGlite } = require('@electric-sql/pglite');
+  if (dataDir) fs.mkdirSync(dataDir, { recursive: true });
+  const pg = dataDir ? new PGlite(dataDir) : new PGlite();
+  return {
+    ...makeApi({ query: (sql, params) => pg.query(sql, params), exec: (sql) => pg.exec(sql) }),
+    async tx(fn) {
+      return pg.transaction((t) => fn(makeApi({ query: (s, p) => t.query(s, p), exec: (s) => t.exec(s) })));
+    },
+    close: () => pg.close(),
+  };
+}
+
 /**
- * DBを開いてスキーマを作成する。file に ':memory:' を渡すとメモリDB。
- * @param {string} [file]
+ * データベースを開き、テーブルを作成する。
+ *  - memory: true      → テスト用のメモリDB
+ *  - DATABASE_URL 設定 → 外部の PostgreSQL (Neon など)
+ *  - それ以外          → ローカルの PGlite (data/pgdata に保存、インストール不要)
  */
-function openDatabase(file = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'inventory.db')) {
-  if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
-  const db = new DatabaseSync(file);
-  db.exec('PRAGMA foreign_keys = ON;');
-  if (file !== ':memory:') db.exec('PRAGMA journal_mode = WAL;');
-  db.exec(SCHEMA);
+async function openDatabase({ memory = false } = {}) {
+  let db;
+  if (memory) db = await openPglite(null);
+  else if (process.env.DATABASE_URL) db = await openPg(process.env.DATABASE_URL);
+  else db = await openPglite(process.env.PGLITE_DIR || path.join(__dirname, '..', 'data', 'pgdata'));
+  await db.exec(SCHEMA);
   return db;
 }
 
-/** 関数を1トランザクションで実行する。例外時はロールバック。 */
-function transaction(db, fn) {
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const result = fn();
-    db.exec('COMMIT');
-    return result;
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
-}
-
-module.exports = { openDatabase, transaction };
+module.exports = { openDatabase, NOW_SQL };

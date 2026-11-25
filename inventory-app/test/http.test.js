@@ -6,15 +6,20 @@ const { openDatabase } = require('../src/db');
 const { createServer } = require('../src/server');
 
 let server;
+let db;
 let base;
 
 before(async () => {
-  server = createServer(openDatabase(':memory:'));
+  db = await openDatabase({ memory: true });
+  server = createServer(db);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });
 
-after(() => new Promise((resolve) => server.close(resolve)));
+after(async () => {
+  await new Promise((resolve) => server.close(resolve));
+  await db.close();
+});
 
 const call = async (method, path, body) => {
   const res = await fetch(base + path, {
@@ -25,13 +30,12 @@ const call = async (method, path, body) => {
   return { status: res.status, body: await res.json() };
 };
 
-test('API で拠点・品目を作り、移動と請求書の一連の流れが通る', async () => {
+test('API で拠点・品目を作り、請求書と移動の一連の流れが通る', async () => {
   const t = (await call('POST', '/api/locations', { code: 'TKY', name: '東京' })).body;
   const o = (await call('POST', '/api/locations', { code: 'OSK', name: '大阪' })).body;
   const p = (await call('POST', '/api/products', { sku: 'A-1', name: '部品A', unit_price: 1000 })).body;
   const c = (await call('POST', '/api/customers', { name: 'テスト顧客' })).body;
 
-  // 直接の入庫は API に無いので、DB に台帳を入れる代わりに請求書の 409 を確認する
   const draft = await call('POST', '/api/invoices', {
     customer_id: c.id, location_id: t.id, lines: [{ product_id: p.id, qty: 1 }],
   });
@@ -42,14 +46,19 @@ test('API で拠点・品目を作り、移動と請求書の一連の流れが�
   assert.equal(issue.status, 409, '在庫ゼロの拠点からは発行できない');
   assert.match(issue.body.error, /在庫が不足/);
 
+  const adjust = await call('POST', '/api/stock/adjustments', { location_id: t.id, product_id: p.id, qty: 5 });
+  assert.equal(adjust.status, 201);
+  assert.equal(adjust.body.balance, 5);
+
   const transfer = await call('POST', '/api/transfers', {
-    kind: 'transfer', from_location_id: t.id, to_location_id: o.id, lines: [{ product_id: p.id, qty: 1 }],
+    kind: 'transfer', from_location_id: t.id, to_location_id: o.id, lines: [{ product_id: p.id, qty: 2 }],
   });
-  assert.equal(transfer.status, 409);
+  assert.equal(transfer.status, 201);
 
   const stock = await call('GET', '/api/stock');
   assert.equal(stock.status, 200);
   assert.equal(stock.body.locations.length, 2);
+  assert.equal(stock.body.balances.find((b) => b.location_id === o.id && b.product_id === p.id).qty, 2);
 
   const del = await call('DELETE', `/api/invoices/${draft.body.id}`);
   assert.deepEqual(del.body, { ok: true });
