@@ -610,6 +610,17 @@ async function route() {
 }
 
 $('#invoice-print-btn').addEventListener('click', () => window.print());
+const resetBtn = $('#local-reset');
+if (resetBtn) {
+  resetBtn.addEventListener('click', async () => {
+    if (!confirm('ブラウザ内のデータをすべて消して作り直します。よろしいですか?')) return;
+    try {
+      await window.inventoryLocalReset();
+      toast('データを初期化しました');
+      route();
+    } catch (err) { toast(err.message, true); }
+  });
+}
 $('#invoice-close-btn').addEventListener('click', () => $('#invoice-dialog').close());
 window.addEventListener('hashchange', route);
 route();

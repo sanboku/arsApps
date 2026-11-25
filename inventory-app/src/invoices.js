@@ -2,7 +2,7 @@
 
 const { badRequest, conflict, notFound } = require('./errors');
 const { today, addDays } = require('./dates');
-const { NOW_SQL } = require('./db');
+const { NOW_SQL } = require('./db-core');
 const masters = require('./masters');
 const stock = require('./stock');
 const v = require('./validate');

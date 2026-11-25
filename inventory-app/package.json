@@ -10,11 +10,15 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test --no-warnings test/*.test.js"
+    "test": "node --test --no-warnings test/*.test.js",
+    "build": "node scripts/build-static.js"
   },
   "license": "UNLICENSED",
   "dependencies": {
     "@electric-sql/pglite": "^0.6.0",
     "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }

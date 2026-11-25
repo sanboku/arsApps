@@ -145,3 +145,14 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
   .inv-meta { flex-direction: column; }
   .line-grid input[type="number"] { width: 80px; }
 }
+
+/* ブラウザ内DB(テスト用)のときだけ表示する */
+.local-only { display: none; }
+:root[data-local-db="1"] .local-only { display: flex; }
+
+/* スマホ幅: 表は文字が潰れないよう最小幅を持たせ、横スクロールで見る */
+@media (max-width: 640px) {
+  .table-wrap table { min-width: 560px; }
+  .table-wrap th, .table-wrap td { white-space: nowrap; padding: 7px 6px; }
+  .app-header h1 { font-size: 16px; }
+}
