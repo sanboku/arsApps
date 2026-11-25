@@ -1,0 +1,15 @@
+{
+  "name": "inventory-app",
+  "version": "0.1.0",
+  "description": "複数拠点の在庫管理・サンプル管理・請求書作成の簡易アプリ",
+  "private": true,
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test --no-warnings test/*.test.js"
+  },
+  "license": "UNLICENSED"
+}
